@@ -80,3 +80,11 @@ url={https://openreview.net/forum?id=j5JvZCaDM0}
 ## Acknowledgements
 
 Parts of this code are adapted from [IDQL](https://github.com/philippe-eecs/IDQL) and [DRPO](https://github.com/ManUtdMoon/Distributional-Reachability-Policy-Optimization).
+
+---
+
+pip install "scipy>=1.6.0,<=1.12.0"
+pip install gymnasium
+pip install ml_dtypes==0.2.0
+pip install "numpy<2"
+

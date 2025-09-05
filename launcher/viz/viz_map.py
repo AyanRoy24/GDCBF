@@ -1,6 +1,7 @@
 import os
 import sys
-sys.path.append('.')
+# sys.path.append('.')
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from absl import app, flags
 import re
 import json
@@ -10,11 +11,12 @@ import matplotlib.pyplot as plt
 from matplotlib import colors
 import jax
 from env.point_robot import PointRobot
+# from point_robot import PointRobot
 from jaxrl5.agents import FISOR
 
 
 FLAGS = flags.FLAGS
-flags.DEFINE_string('model_location', '', 'model location for point robot model')
+flags.DEFINE_string('model_location', '../../results/PointRobot/ddpm_feasibility_hj_N16_minqc_2025-09-02_s30_901/', 'model location for point robot model')
 
 
 def to_config_dict(d):
@@ -233,4 +235,5 @@ def main(_):
 
 
 if __name__ == '__main__':
+    print('current working directory:', os.getcwd())
     app.run(main)

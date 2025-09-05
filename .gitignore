@@ -16,3 +16,13 @@ results/
 .vscode
 
 *.hdf5
+
+# folder
+data/
+assets/
+
+# files
+*.txt
+*.png
+*.pdf
+*.sh

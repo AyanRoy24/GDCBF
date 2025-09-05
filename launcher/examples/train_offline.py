@@ -1,3 +1,8 @@
+# from copyreg import pickle
+import jax
+import optax
+import jax.numpy as jnp
+import pickle
 import os
 import sys
 sys.path.append('.')
@@ -13,7 +18,10 @@ import gymnasium as gym
 from env.env_list import env_list
 from env.point_robot import PointRobot
 from jaxrl5.wrappers import wrap_gym
-from jaxrl5.agents import FISOR
+from jaxrl5.agents import FISOR, GDCBF, DCBF
+
+# from jaxrl5.agents import train_cbf, CBFMLP, CBFTrainState, train_step, update
+
 from jaxrl5.data.dsrl_datasets import DSRLDataset
 from jaxrl5.evaluation import evaluate, evaluate_pr
 import json
@@ -63,16 +71,12 @@ def call_main(details):
         details['seed'], env.observation_space, env.action_space, **config_dict
     )
 
-
     save_time = 1
     for i in trange(details['max_steps'], smoothing=0.1, desc=details['experiment_name']):
-        sample = ds.sample_jax(details['batch_size'])
+        sample = ds.sample_jax(details['batch_size'])     
         agent, info = agent.update(sample)
-        
         if i % details['log_interval'] == 0:
             wandb.log({f"train/{k}": v for k, v in info.items()}, step=i)
-
-        # if i % details['eval_interval'] == 0 and i > 0:
         if i % details['eval_interval'] == 0:
             agent.save(f"./results/{details['group']}/{details['experiment_name']}", save_time)
             save_time += 1
@@ -83,8 +87,8 @@ def call_main(details):
             if details['env_name'] != 'PointRobot':
                 eval_info["normalized_return"], eval_info["normalized_cost"] = env.get_normalized_score(eval_info["return"], eval_info["cost"])
             wandb.log({f"eval/{k}": v for k, v in eval_info.items()}, step=i)
-
-
+   
+   
 def main(_):
     parameters = FLAGS.config
     if FLAGS.project != '':
