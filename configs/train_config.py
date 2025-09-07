@@ -63,7 +63,17 @@ def get_config(config_string):
         "gdcbf": ConfigDict(
             dict(
                 agent_kwargs=dict(
-                    model_cls="DCBF",
+                    model_cls="CBF",
+                    # --- add to config ---
+                    cbf_gamma = 0.99,
+                    cbf_expectile_tau = 0.02,
+                    cbf_admissibility_coef = 1e-3,
+                    # safe_reward_mode = "piecewise",   # or "penalty"
+                    unsafe_penalty_alpha = 1.0,
+                    r_min = -1.0,
+                    mask_unsafe_for_actor = False,
+
+
                     cost_limit=10,
                     actor_lr=3e-4,
                     critic_lr=3e-4,

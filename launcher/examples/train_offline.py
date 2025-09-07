@@ -18,7 +18,7 @@ import gymnasium as gym
 from env.env_list import env_list
 from env.point_robot import PointRobot
 from jaxrl5.wrappers import wrap_gym
-from jaxrl5.agents import FISOR, GDCBF, DCBF
+from jaxrl5.agents import FISOR, CBF # GDCBF, DCBF
 
 # from jaxrl5.agents import train_cbf, CBFMLP, CBFTrainState, train_step, update
 
