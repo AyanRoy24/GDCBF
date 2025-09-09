@@ -19,11 +19,9 @@ from env.env_list import env_list
 from env.point_robot import PointRobot
 from jaxrl5.wrappers import wrap_gym
 from jaxrl5.agents import FISOR, CBF # GDCBF, DCBF
-
 # from jaxrl5.agents import train_cbf, CBFMLP, CBFTrainState, train_step, update
-
 from jaxrl5.data.dsrl_datasets import DSRLDataset
-from jaxrl5.evaluation import evaluate, evaluate_pr
+from jaxrl5.evaluation import evaluate, evaluate_pr, plot_cbf_cost_vs_safe_value
 import json
 
 
@@ -86,6 +84,8 @@ def call_main(details):
                 eval_info = evaluate(agent, env, details['eval_episodes'])
             if details['env_name'] != 'PointRobot':
                 eval_info["normalized_return"], eval_info["normalized_cost"] = env.get_normalized_score(eval_info["return"], eval_info["cost"])
+            modeldir = f"./results/{details['group']}/{details['experiment_name']}"
+            plot_cbf_cost_vs_safe_value(agent, ds, modeldir)
             wandb.log({f"eval/{k}": v for k, v in eval_info.items()}, step=i)
    
    

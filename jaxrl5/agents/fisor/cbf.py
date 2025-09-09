@@ -3,7 +3,8 @@ import os
 from functools import partial
 from typing import Dict, Optional, Sequence, Tuple, Union
 import flax.linen as nn
-import gym
+from flax.core import FrozenDict
+import gymnasium as gym 
 import jax
 import jax.numpy as jnp
 import optax
@@ -20,7 +21,7 @@ from jaxrl5.networks.diffusion import dpm_solver_sampler_1st, vp_sde_schedule
 
 def phi_fisor(x, y, gamma):
     # Implements Φ_FISOR(x, y) = (1-γ)x + γ min{x, y}
-    return (1 - gamma) * x + gamma * jnp.minimum(x, y)
+    return (1 - gamma) * x + gamma * jnp.maximum(x, y)
 
 def expectile_loss(diff, expectile=0.8):
     weight = jnp.where(diff > 0, expectile, (1 - expectile))
@@ -203,6 +204,8 @@ class CBF(Agent):
         actions = jnp.expand_dims(actions, axis = 0)
         actor_params = actor_def.init(actor_key, observations, actions,
                                         time)['params']
+        
+        actor_params = FrozenDict(actor_params) 
 
         score_model = TrainState.create(apply_fn=actor_def.apply,
                                         params=actor_params,
@@ -219,6 +222,7 @@ class CBF(Agent):
         critic_cls = partial(StateActionValue, base_cls=critic_base_cls)
         critic_def = Ensemble(critic_cls, num=num_qs)
         critic_params = critic_def.init(critic_key, observations, actions)["params"]
+        critic_params = FrozenDict(critic_params)
         critic_optimiser = optax.adam(learning_rate=critic_lr)
         critic = TrainState.create(
             apply_fn=critic_def.apply, params=critic_params, tx=critic_optimiser
@@ -237,6 +241,7 @@ class CBF(Agent):
             # critic_def = Ensemble(critic_cls, num=num_qs)
 
         safe_critic_params = critic_def.init(safe_critic_key, observations, actions)["params"]
+        safe_critic_params = FrozenDict(safe_critic_params)
         safe_critic = TrainState.create(
             apply_fn=critic_def.apply, params=safe_critic_params, tx=critic_optimiser
         )
@@ -250,6 +255,7 @@ class CBF(Agent):
         value_base_cls = partial(MLP, hidden_dims=critic_hidden_dims, activate_final=True, use_layer_norm=value_layer_norm)
         value_def = StateValue(base_cls=value_base_cls)
         value_params = value_def.init(value_key, observations)["params"]
+        value_params = FrozenDict(value_params)
         value_optimiser = optax.adam(learning_rate=value_lr)
 
         value = TrainState.create(apply_fn=value_def.apply,
@@ -261,6 +267,7 @@ class CBF(Agent):
             # value_def = Relu_StateValue(base_cls=value_base_cls)
 
         safe_value_params = value_def.init(safe_value_key, observations)["params"]
+        safe_value_params = FrozenDict(safe_value_params)
 
         safe_value = TrainState.create(apply_fn=value_def.apply,
                                   params=safe_value_params,
@@ -345,7 +352,6 @@ class CBF(Agent):
         return self.replace(safe_critic=safe_critic, safe_target_critic=safe_target_critic), info
 
     def reward_piecewise_target(self, batch):
-        # Implements Eqn (1) from #file:reward_critic.png
         qh = self.safe_critic.apply_fn({"params": self.safe_critic.params}, batch["observations"], batch["actions"]).max(axis=0)
         next_vr = self.value.apply_fn({"params": self.value.params}, batch["next_observations"])
         mask_unsafe = (qh > 0)
@@ -375,14 +381,14 @@ class CBF(Agent):
         return self.replace(critic=critic, target_critic=target_critic), info
 
     def value_loss_piecewise_fn(self, value_params, batch):
-        # Implements Eqn (2) from #file:reward_critic.png
         qh = self.safe_critic.apply_fn({"params": self.safe_critic.params}, batch["observations"], batch["actions"]).max(axis=0)
         qs = self.critic.apply_fn({"params": self.critic.params}, batch["observations"], batch["actions"]).min(axis=0)
         mask_unsafe = (qh > 0)
         mask_safe = (qh <= 0)
         target_v = mask_safe * qs + mask_unsafe * (self.r_min / (1 - self.discount) - qh)
         v = self.value.apply_fn({"params": value_params}, batch["observations"])
-        loss = ((v - target_v) ** 2).mean()
+        # loss = ((v - target_v) ** 2).mean()
+        loss = expectile_loss(v - target_v).mean()
         return loss, {"value_loss": loss, "v": v.mean()}
 
     def update_value(self, batch):
@@ -509,12 +515,13 @@ class CBF(Agent):
         new_agent = agent.replace(safe_critic=safe_critic, safe_target_critic=safe_target_critic)
         return new_agent, info
 
+
     def update_actor(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
         rng = agent.rng
         key, rng = jax.random.split(rng, 2)
 
+        # Sample noisy actions using DDPM or DPM solver
         if agent.sampling_method == 'dpm_solver-1':
-            # continuous time SDE
             eps = 1e-3
             time = jax.random.uniform(key, (batch['actions'].shape[0], )) * (1. - eps) + eps
             key, rng = jax.random.split(rng, 2)
@@ -523,86 +530,44 @@ class CBF(Agent):
             time = jnp.expand_dims(time, axis=1)
             noisy_actions = alpha_t[:, None] * batch['actions'] + sigma_t[:, None] * noise_sample
         elif agent.sampling_method == 'ddpm':
-            # discrete time SDE
             time = jax.random.randint(key, (batch['actions'].shape[0], ), 0, agent.T)
             key, rng = jax.random.split(rng, 2)
             noise_sample = jax.random.normal(key, (batch['actions'].shape[0], agent.act_dim))
-            
             alpha_hats = agent.alpha_hats[time]
             time = jnp.expand_dims(time, axis=1)
             alpha_1 = jnp.expand_dims(jnp.sqrt(alpha_hats), axis=1)
             alpha_2 = jnp.expand_dims(jnp.sqrt(1 - alpha_hats), axis=1)
             noisy_actions = alpha_1 * batch['actions'] + alpha_2 * noise_sample
         else:
-            raise ValueError(f'Invalid samplint method: {agent.sampling_method}')
+            raise ValueError(f'Invalid sampling method: {agent.sampling_method}')
 
         key, rng = jax.random.split(rng, 2)
-        
-        '''
-        reward adv
-        '''
+
+        # Compute reward critic Q^R(s,a) and value V^R(s)
         qs = agent.target_critic.apply_fn(
             {"params": agent.target_critic.params},
             batch["observations"],
             batch["actions"],
         )
-
         q = qs.min(axis=0)
-
         v = agent.value.apply_fn(
             {"params": agent.value.params}, batch["observations"]
         )
-        
-        '''
-        cost reward
-        '''
-        qcs = agent.safe_target_critic.apply_fn(
-            {"params": agent.safe_target_critic.params},
-            batch["observations"],
-            batch["actions"],
-        )
 
-        qc = qcs.max(axis=0)
+        # Advantage and exponential weighting
+        adv = q - v
+        weights = jnp.exp(adv * agent.reward_temperature)
 
-        vc = agent.safe_value.apply_fn(
-                {"params": agent.safe_value.params}, batch["observations"]
-            )
-
-        if agent.critic_type == "qc":
-            qc = qc - agent.qc_thres
-            vc = vc - agent.qc_thres
-
-        if agent.actor_objective == "feasibility":
-            eps = 0. if agent.critic_type != 'qc' else 0.
-            
-            unsafe_condition = jnp.where( vc >  0. - eps, 1, 0)
-            safe_condition = jnp.where(vc <= 0. - eps, 1, 0) * jnp.where(qc<=0. - eps, 1, 0)
-            
-            cost_exp_adv = jnp.exp((vc-qc) * agent.cost_temperature)
-            reward_exp_adv = jnp.exp((q - v) * agent.reward_temperature)
-            
-            unsafe_weights = unsafe_condition * jnp.clip(cost_exp_adv, 0, agent.cost_ub) ## ignore vc >0, qc>vc
-            safe_weights = safe_condition * jnp.clip(reward_exp_adv, 0, 100)
-            
-            weights = unsafe_weights + safe_weights
-        elif agent.actor_objective == "bc":
-            weights = jnp.ones(qc.shape)
-        else:
-            raise ValueError(f'Invalid actor objective: {agent.actor_objective}')
-        
-        def actor_loss_fn(
-                score_model_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
+        def actor_loss_fn(score_model_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
             eps_pred = agent.score_model.apply_fn({'params': score_model_params},
-                                       batch['observations'],
-                                       noisy_actions,
-                                       time,
-                                       rngs={'dropout': key},
-                                       training=True)
-            
+                                    batch['observations'],
+                                    noisy_actions,
+                                    time,
+                                    rngs={'dropout': key},
+                                    training=True)
             actor_loss = (((eps_pred - noise_sample) ** 2).sum(axis = -1) * weights).mean()
-            
-            return actor_loss, {'actor_loss': actor_loss, 'weights' : weights.mean()}
-            
+            return actor_loss, {'actor_loss': actor_loss, 'weights': weights.mean()}
+
         grads, info = jax.grad(actor_loss_fn, has_aux=True)(agent.score_model.params)
         score_model = agent.score_model.apply_gradients(grads=grads)
 
@@ -617,6 +582,7 @@ class CBF(Agent):
         new_agent = agent.replace(score_model=score_model, target_score_model=target_score_model, rng=rng)
 
         return new_agent, info
+
 
     def eval_actions(self, observations: jnp.ndarray):
         rng = self.rng
