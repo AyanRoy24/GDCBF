@@ -341,20 +341,9 @@ class CBF(Agent):
         qcs = self.safe_critic.apply_fn({"params": cbf_params}, batch["observations"], batch["actions"])
         loss = ((qcs - phi) ** 2).mean()
         # Admissibility penalty (see Theorem 4.1)
-        admissibility_violation = jnp.maximum(phi - h_s, 0).mean()
-        total_loss = loss + self.cbf_admissibility_coef * admissibility_violation
-        return total_loss, {"cbf_loss": loss, "admissibility_violation": admissibility_violation}
-
-    # def update_cbf(self, batch: DatasetDict) -> Tuple["CBF", Dict[str, float]]:
-    #     grads, info = jax.grad(self.cbf_loss_fn, has_aux=True)(self.safe_critic.params, batch)
-    #     safe_critic = self.safe_critic.apply_gradients(grads=grads)
-    #     self = self.replace(safe_critic=safe_critic)
-    #     # Soft update
-    #     safe_target_critic_params = optax.incremental_update(
-    #         safe_critic.params, self.safe_target_critic.params, self.tau
-    #     )
-    #     safe_target_critic = self.safe_target_critic.replace(params=safe_target_critic_params)
-    #     return self.replace(safe_critic=safe_critic, safe_target_critic=safe_target_critic), info
+        # admissibility_violation = jnp.maximum(phi - h_s, 0).mean()
+        # total_loss = loss + self.cbf_admissibility_coef * admissibility_violation
+        return loss, {"cbf_loss": loss} #, "admissibility_violation": admissibility_violation}
 
     def update_cbf(self, batch: DatasetDict) -> Tuple["CBF", Dict[str, float]]:
         grads, info = jax.grad(self.cbf_loss_fn, has_aux=True)(self.safe_critic.params, batch)
@@ -389,30 +378,7 @@ class CBF(Agent):
 
         return self.replace(safe_critic=safe_critic, safe_target_critic=safe_target_critic, safe_value=safe_value), {**info, **info_v}
     
-    # def update_cbf(self, batch: DatasetDict) -> Tuple["CBF", Dict[str, float]]:
-    #     grads, info = jax.grad(self.cbf_loss_fn, has_aux=True)(self.safe_critic.params, batch)
-    #     safe_critic = self.safe_critic.apply_gradients(grads=grads)
-    #     self = self.replace(safe_critic=safe_critic)
-    #     # Soft update
-    #     safe_target_critic_params = optax.incremental_update(
-    #         safe_critic.params, self.safe_target_critic.params, self.tau
-    #     )
-    #     safe_target_critic = self.safe_target_critic.replace(params=safe_target_critic_params)
-
-    #     # Update safe_value using expectile loss (not safe_expectile)
-    #     h_s = batch["costs"]
-    #     next_v = self.safe_value.apply_fn({"params": self.safe_value.params}, batch["next_observations"])
-    #     phi = phi_fisor(h_s, next_v, self.cbf_gamma)
-    #     def safe_value_loss_fn(safe_value_params):
-    #         v = self.safe_value.apply_fn({"params": safe_value_params}, batch["observations"])
-    #         value_loss = safe_expectile_loss(phi - v, self.cbf_expectile_tau).mean()
-    #         return value_loss, {"safe_value_loss": value_loss, "v": v.mean()}
-    #     grads_v, info_v = jax.grad(safe_value_loss_fn, has_aux=True)(self.safe_value.params)
-    #     safe_value = self.safe_value.apply_gradients(grads=grads_v)
-    #     self = self.replace(safe_value=safe_value)
-
-    #     return self.replace(safe_critic=safe_critic, safe_target_critic=safe_target_critic, safe_value=safe_value), {**info, **info_v}
-
+    
     def reward_piecewise_target(self, batch):
         qh = self.safe_critic.apply_fn({"params": self.safe_critic.params}, batch["observations"], batch["actions"]).max(axis=0)
         next_vr = self.value.apply_fn({"params": self.value.params}, batch["next_observations"])
@@ -453,10 +419,23 @@ class CBF(Agent):
         loss = expectile_loss(v - target_v).mean()
         return loss, {"value_loss": loss, "v": v.mean()}
 
+    # def update_value(self, batch: DatasetDict) -> Tuple["CBF", Dict[str, float]]:
+    #     grads, info = jax.grad(self.value_loss_piecewise_fn, has_aux=True)(self.value.params, batch)
+    #     value = self.value.apply_gradients(grads=grads)
+    #     return self.replace(value=value), info
+
+    def value_loss_fn(self, value_params, batch):
+        # Use Q-value from target reward critic for expectile regression
+        qs = self.target_critic.apply_fn({"params": self.target_critic.params}, batch["observations"], batch["actions"]).min(axis=0)
+        v = self.value.apply_fn({"params": value_params}, batch["observations"])
+        loss = expectile_loss(qs - v, self.cbf_expectile_tau).mean()
+        return loss, {"value_loss": loss, "v": v.mean()}
+
     def update_value(self, batch: DatasetDict) -> Tuple["CBF", Dict[str, float]]:
-        grads, info = jax.grad(self.value_loss_piecewise_fn, has_aux=True)(self.value.params, batch)
+        grads, info = jax.grad(self.value_loss_fn, has_aux=True)(self.value.params, batch)
         value = self.value.apply_gradients(grads=grads)
         return self.replace(value=value), info
+
 
     
     def update_v(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
