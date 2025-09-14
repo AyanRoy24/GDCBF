@@ -18,7 +18,7 @@ from jaxrl5.data.dataset import DatasetDict
 from jaxrl5.networks import MLP, Ensemble, StateActionValue, StateValue, Relu_StateActionValue, Relu_StateValue, DDPM, FourierFeatures, cosine_beta_schedule, ddpm_sampler, MLPResNet, get_weight_decay_mask, vp_beta_schedule
 from jaxrl5.networks.diffusion import dpm_solver_sampler_1st, vp_sde_schedule
 
-
+max_weight = 100
 def phi_fisor(x, y, gamma):
     # Implements Φ_FISOR(x, y) = (1-γ)x + γ min{x, y}
     return (1 - gamma) * x + gamma * jnp.maximum(x, y)
@@ -30,6 +30,11 @@ def expectile_loss(diff, expectile=0.8):
 def safe_expectile_loss(diff, expectile=0.8):
     weight = jnp.where(diff < 0, expectile, (1 - expectile))
     return weight * (diff**2)
+
+def tree_has_nan(tree):
+    # Returns a JAX boolean array, not a Python bool
+    leaves = jax.tree_util.tree_leaves(tree)
+    return jnp.any(jnp.stack([jnp.any(jnp.isnan(x)) for x in leaves]))
 
 @partial(jax.jit, static_argnames=('critic_fn'))
 def compute_q(critic_fn, critic_params, observations, actions):
@@ -355,7 +360,6 @@ class CBF(Agent):
         grads, info = jax.grad(self.cbf_loss_fn, has_aux=True)(self.safe_critic.params, batch)
         safe_critic = self.safe_critic.apply_gradients(grads=grads)
         self = self.replace(safe_critic=safe_critic)
-        # Soft update
         safe_target_critic_params = optax.incremental_update(
             safe_critic.params, self.safe_target_critic.params, self.tau
         )
@@ -368,12 +372,46 @@ class CBF(Agent):
         def safe_value_loss_fn(safe_value_params):
             v = self.safe_value.apply_fn({"params": safe_value_params}, batch["observations"])
             value_loss = expectile_loss(phi - v, self.cbf_expectile_tau).mean()
+            # Add clipping to prevent NaNs
+            value_loss = jnp.clip(value_loss, -1e6, 1e6)
+            v = jnp.clip(v, -1e6, 1e6)
             return value_loss, {"safe_value_loss": value_loss, "v": v.mean()}
         grads_v, info_v = jax.grad(safe_value_loss_fn, has_aux=True)(self.safe_value.params)
         safe_value = self.safe_value.apply_gradients(grads=grads_v)
         self = self.replace(safe_value=safe_value)
 
+        # Check for NaNs
+        # assert not jnp.isnan(safe_value.params).any(), "NaN in safe_value params"
+        # assert not jnp.isnan(safe_critic.params).any(), "NaN in safe_critic params"
+
+        # assert not tree_has_nan(safe_value.params), "NaN in safe_value params"
+        # assert not tree_has_nan(safe_critic.params), "NaN in safe_critic params"
+
         return self.replace(safe_critic=safe_critic, safe_target_critic=safe_target_critic, safe_value=safe_value), {**info, **info_v}
+    
+    # def update_cbf(self, batch: DatasetDict) -> Tuple["CBF", Dict[str, float]]:
+    #     grads, info = jax.grad(self.cbf_loss_fn, has_aux=True)(self.safe_critic.params, batch)
+    #     safe_critic = self.safe_critic.apply_gradients(grads=grads)
+    #     self = self.replace(safe_critic=safe_critic)
+    #     # Soft update
+    #     safe_target_critic_params = optax.incremental_update(
+    #         safe_critic.params, self.safe_target_critic.params, self.tau
+    #     )
+    #     safe_target_critic = self.safe_target_critic.replace(params=safe_target_critic_params)
+
+    #     # Update safe_value using expectile loss (not safe_expectile)
+    #     h_s = batch["costs"]
+    #     next_v = self.safe_value.apply_fn({"params": self.safe_value.params}, batch["next_observations"])
+    #     phi = phi_fisor(h_s, next_v, self.cbf_gamma)
+    #     def safe_value_loss_fn(safe_value_params):
+    #         v = self.safe_value.apply_fn({"params": safe_value_params}, batch["observations"])
+    #         value_loss = safe_expectile_loss(phi - v, self.cbf_expectile_tau).mean()
+    #         return value_loss, {"safe_value_loss": value_loss, "v": v.mean()}
+    #     grads_v, info_v = jax.grad(safe_value_loss_fn, has_aux=True)(self.safe_value.params)
+    #     safe_value = self.safe_value.apply_gradients(grads=grads_v)
+    #     self = self.replace(safe_value=safe_value)
+
+    #     return self.replace(safe_critic=safe_critic, safe_target_critic=safe_target_critic, safe_value=safe_value), {**info, **info_v}
 
     def reward_piecewise_target(self, batch):
         qh = self.safe_critic.apply_fn({"params": self.safe_critic.params}, batch["observations"], batch["actions"]).max(axis=0)
@@ -581,6 +619,7 @@ class CBF(Agent):
         # Advantage and exponential weighting
         adv = q - v
         weights = jnp.exp(adv * agent.reward_temperature)
+        weights = jnp.clip(weights, 0, max_weight)
 
         def actor_loss_fn(score_model_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
             eps_pred = agent.score_model.apply_fn({'params': score_model_params},
@@ -639,6 +678,7 @@ class CBF(Agent):
         else:
             raise ValueError(f'Invalid extract_method: {self.extract_method}')
         action = actions[idx]
+        assert not jnp.isnan(action).any(), "NaN in extracted action"
         new_rng = rng
 
         return np.array(action.squeeze()), self.replace(rng=new_rng)
@@ -728,6 +768,8 @@ class CBF(Agent):
         # new_agent, safe_critic_info = new_agent.update_vc(mini_batch)
         # new_agent, safe_value_info = new_agent.update_qc(mini_batch)
         new_agent, cbf_info = new_agent.update_cbf(mini_batch)
+        # assert not tree_has_nan(new_agent.safe_critic.params), "NaN in safe_critic params after update"
+        # assert not tree_has_nan(new_agent.safe_value.params), "NaN in safe_value params after update"
         new_agent, reward_info = new_agent.update_reward_critic(mini_batch)
         new_agent, value_info = new_agent.update_value(mini_batch)
 
@@ -741,6 +783,10 @@ class CBF(Agent):
             **reward_info
             }
 
+    # if bool(tree_has_nan(agent.safe_critic.params)):
+    #     print("NaN detected in safe_critic params after update!")
+    
+    
     def save(self, modeldir, save_time):
         file_name = 'model' + str(save_time) + '.pickle'
         state_dict = flax.serialization.to_state_dict(self)

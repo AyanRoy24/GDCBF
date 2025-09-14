@@ -80,7 +80,7 @@ class PointRobot(gym.Env):
             violation=(con_val>0).item()
         )
         # assert np.isclose(info['constraint_value'], self.get_constraint_values(state), atol=1e-4)
-        # assert np.isclose(info['constraint_value'], self.get_constraint_values(state), atol=1e-3)
+        assert np.isclose(info['constraint_value'], float(self.get_constraint_values(state)), atol=1e-4)
         assert info['violation'] == self.check_violation(state)
     
         return info
@@ -97,6 +97,23 @@ class PointRobot(gym.Env):
             dist = np.linalg.norm(hazard_vec, axis=1)
             min_dist = np.minimum(dist, min_dist)
         return self.hazard_size - np.squeeze(min_dist)
+
+    # def get_constraint_values(self, states):
+    #     if len(states.shape) == 1:
+    #         states = states[np.newaxis, ...]
+    #     assert len(states.shape) == 2
+    #     min_dist = np.full(states.shape[0], float('inf'))
+    #     for hazard_pos in self.hazard_position_list:
+    #         hazard_vec = hazard_pos[:2] - states[:, :2]
+    #         dist = np.linalg.norm(hazard_vec, axis=1)
+    #         min_dist = np.minimum(dist, min_dist)
+    #     result = self.hazard_size - np.squeeze(min_dist)
+    #     if result.shape == ():  # scalar
+    #         return float(result)
+    #     elif result.shape == (1,):
+    #         return float(result[0])
+    #     else:
+    #         return result
     
     def check_violation(self, states):
         if len(states.shape) == 1:

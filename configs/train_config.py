@@ -5,11 +5,11 @@ def get_config(config_string):
     base_real_config = dict(
         project='FISOR',
         seed=-1,
-        max_steps=1000001,
+        max_steps=100001,
         eval_episodes=20,
         batch_size=2048, #Actor batch size x 2 (so really 1024), critic is fixed to 256
         log_interval=1000,
-        eval_interval=250000,
+        eval_interval=25000,
         normalize_returns=True,
     )
 
