@@ -23,7 +23,7 @@ def phi_fisor(x, y, gamma):
     # Implements Φ_FISOR(x, y) = (1-γ)x + γ min{x, y}
     return (1 - gamma) * x + gamma * jnp.maximum(x, y)
 
-def expectile_loss(diff, expectile=0.8):
+def expectile_loss(diff, expectile=0.7):
     weight = jnp.where(diff > 0, expectile, (1 - expectile))
     return weight * (diff**2)
 
@@ -360,7 +360,8 @@ class CBF(Agent):
         phi = phi_fisor(h_s, next_v, self.cbf_gamma)
         def safe_value_loss_fn(safe_value_params):
             v = self.safe_value.apply_fn({"params": safe_value_params}, batch["observations"])
-            value_loss = expectile_loss(phi - v, self.cbf_expectile_tau).mean()
+            # value_loss = expectile_loss(phi - v, self.cbf_expectile_tau).mean()
+            value_loss = expectile_loss(phi - v).mean()
             # Add clipping to prevent NaNs
             value_loss = jnp.clip(value_loss, -1e6, 1e6)
             v = jnp.clip(v, -1e6, 1e6)
@@ -428,7 +429,8 @@ class CBF(Agent):
         # Use Q-value from target reward critic for expectile regression
         qs = self.target_critic.apply_fn({"params": self.target_critic.params}, batch["observations"], batch["actions"]).min(axis=0)
         v = self.value.apply_fn({"params": value_params}, batch["observations"])
-        loss = expectile_loss(qs - v, self.cbf_expectile_tau).mean()
+        # loss = expectile_loss(qs - v, self.cbf_expectile_tau).mean()
+        loss = expectile_loss(qs - v).mean()
         return loss, {"value_loss": loss, "v": v.mean()}
 
     def update_value(self, batch: DatasetDict) -> Tuple["CBF", Dict[str, float]]:
