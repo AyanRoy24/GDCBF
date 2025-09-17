@@ -361,7 +361,7 @@ class CBF(Agent):
         def safe_value_loss_fn(safe_value_params):
             v = self.safe_value.apply_fn({"params": safe_value_params}, batch["observations"])
             # value_loss = expectile_loss(phi - v, self.cbf_expectile_tau).mean()
-            value_loss = expectile_loss(phi - v).mean()
+            value_loss = expectile_loss(phi - v, 0.3).mean()
             # Add clipping to prevent NaNs
             value_loss = jnp.clip(value_loss, -1e6, 1e6)
             v = jnp.clip(v, -1e6, 1e6)
@@ -417,7 +417,7 @@ class CBF(Agent):
         target_v = mask_safe * qs + mask_unsafe * (self.r_min / (1 - self.discount) - qh)
         v = self.value.apply_fn({"params": value_params}, batch["observations"])
         # loss = ((v - target_v) ** 2).mean()
-        loss = expectile_loss(v - target_v).mean()
+        loss = expectile_loss(v - target_v, 0.7).mean()
         return loss, {"value_loss": loss, "v": v.mean()}
 
     # def update_value(self, batch: DatasetDict) -> Tuple["CBF", Dict[str, float]]:
@@ -430,7 +430,7 @@ class CBF(Agent):
         qs = self.target_critic.apply_fn({"params": self.target_critic.params}, batch["observations"], batch["actions"]).min(axis=0)
         v = self.value.apply_fn({"params": value_params}, batch["observations"])
         # loss = expectile_loss(qs - v, self.cbf_expectile_tau).mean()
-        loss = expectile_loss(qs - v).mean()
+        loss = expectile_loss(qs - v, 0.3).mean()
         return loss, {"value_loss": loss, "v": v.mean()}
 
     def update_value(self, batch: DatasetDict) -> Tuple["CBF", Dict[str, float]]:
@@ -628,41 +628,61 @@ class CBF(Agent):
         return new_agent, info
 
 
-    def eval_actions(self, observations: jnp.ndarray):
-        rng = self.rng
-
-        assert len(observations.shape) == 1
-        observations = jax.device_put(observations)
-        observations = jnp.expand_dims(observations, axis = 0).repeat(self.N, axis = 0)
-
-        score_params = self.target_score_model.params
+    def eval_actions(self, observations: jnp.ndarray, model_cls="gdcbf"):
+        if model_cls == "gdcbf":
+            # Direct deterministic action selection (e.g., mean action)
+            # If score_model is a deterministic policy, use its output
+            # If stochastic, use mean or mode
+            obs = jnp.expand_dims(observations, axis=0)
+            # Example: Use score_model.apply_fn with time=0 for deterministic output
+            time = jnp.zeros((1, 1))
+            action = self.score_model.apply_fn(
+                {"params": self.score_model.params},
+                obs,
+                jnp.zeros((1, self.act_dim)),  # dummy action input if needed
+                time,
+                training=False
+            )
+            # If output is noise prediction, you may need to post-process to get action
+            # For most MLP policies, just use the output as action
+            action = jnp.clip(action.squeeze(), -1, 1)
+            return np.array(action.squeeze()), self
         
-        if self.sampling_method == 'ddpm':
-            actions, rng = ddpm_sampler(self.score_model.apply_fn, score_params, self.T, rng, self.act_dim, observations, self.alphas, self.alpha_hats, self.betas, self.ddpm_temperature, self.M, self.clip_sampler)
-        elif self.sampling_method == 'dpm_solver-1':
-            actions, rng = dpm_solver_sampler_1st(self.score_model.apply_fn, score_params, self.T, rng, self.act_dim, observations, self.alphas, self.alpha_hats, self.betas, self.ddpm_temperature, self.M, self.clip_sampler)
-        else:
-            raise ValueError(f'Invalid sampling method: {self.sampling_method}')
-        
-        rng, key = jax.random.split(rng, 2)
-        qs = compute_q(self.target_critic.apply_fn, self.target_critic.params, observations, actions)
-        qcs = compute_safe_q(self.safe_target_critic.apply_fn, self.safe_target_critic.params, observations, actions)
+        else :
+            rng = self.rng
 
-        if self.critic_type == "qc":
-            qcs = qcs - self.qc_thres
+            assert len(observations.shape) == 1
+            observations = jax.device_put(observations)
+            observations = jnp.expand_dims(observations, axis = 0).repeat(self.N, axis = 0)
+
+            score_params = self.target_score_model.params
+            
+            if self.sampling_method == 'ddpm':
+                actions, rng = ddpm_sampler(self.score_model.apply_fn, score_params, self.T, rng, self.act_dim, observations, self.alphas, self.alpha_hats, self.betas, self.ddpm_temperature, self.M, self.clip_sampler)
+            elif self.sampling_method == 'dpm_solver-1':
+                actions, rng = dpm_solver_sampler_1st(self.score_model.apply_fn, score_params, self.T, rng, self.act_dim, observations, self.alphas, self.alpha_hats, self.betas, self.ddpm_temperature, self.M, self.clip_sampler)
+            else:
+                raise ValueError(f'Invalid sampling method: {self.sampling_method}')
+            
+            rng, key = jax.random.split(rng, 2)
+            qs = compute_q(self.target_critic.apply_fn, self.target_critic.params, observations, actions)
+            qcs = compute_safe_q(self.safe_target_critic.apply_fn, self.safe_target_critic.params, observations, actions)
+
+            if self.critic_type == "qc":
+                qcs = qcs - self.qc_thres
 
 
-        if self.extract_method == 'maxq':
-            idx = jnp.argmax(qs)
-        elif self.extract_method == 'minqc':
-            idx = jnp.argmin(qcs)
-        else:
-            raise ValueError(f'Invalid extract_method: {self.extract_method}')
-        action = actions[idx]
-        assert not jnp.isnan(action).any(), "NaN in extracted action"
-        new_rng = rng
+            if self.extract_method == 'maxq':
+                idx = jnp.argmax(qs)
+            elif self.extract_method == 'minqc':
+                idx = jnp.argmin(qcs)
+            else:
+                raise ValueError(f'Invalid extract_method: {self.extract_method}')
+            action = actions[idx]
+            assert not jnp.isnan(action).any(), "NaN in extracted action"
+            new_rng = rng
 
-        return np.array(action.squeeze()), self.replace(rng=new_rng)
+            return np.array(action.squeeze()), self.replace(rng=new_rng)
     
     
     def actor_loss_no_grad(agent, batch: DatasetDict):

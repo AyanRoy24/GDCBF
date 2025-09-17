@@ -87,6 +87,10 @@ def call_main(details):
             modeldir = f"./results/{details['group']}/{details['experiment_name']}"
             plot_cbf_cost_vs_safe_value(agent, ds, modeldir)
             wandb.log({f"eval/{k}": v for k, v in eval_info.items()}, step=i)
+            # score = eval_info["return"] - eval_info["cost"]  # Or use another formula
+            # # score = eval_info["return"] - 10 * eval_info["cost"]
+            # wandb.log({"eval/score": score, **{f"eval/{k}": v for k, v in eval_info.items()}}, step=i)
+
    
    
 def main(_):

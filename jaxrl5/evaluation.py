@@ -36,10 +36,10 @@ def evaluate(
     agent, env: gym.Env, num_episodes: int, save_video: bool = False, render: bool = False
 ) -> Dict[str, float]:
 
-    episode_rets, episode_costs, episode_lens, episode_no_safes = [], [], [], []
+    episode_rets, episode_costs, episode_lens, episode_no_safes,episode_barrier_violations = [], [], [], [], []
     for _ in trange(num_episodes, desc="Evaluating", leave=False):
         obs, info = env.reset()
-        episode_ret, episode_cost, episode_len= 0.0, 0.0, 0
+        episode_ret, episode_cost, episode_len, episode_violations = 0.0, 0.0, 0, 0
         while True:
             if render:
                 env.render()
@@ -47,16 +47,23 @@ def evaluate(
             action, agent = agent.eval_actions(obs)
             obs, reward, terminated, truncated, info = env.step(action)
             cost = info["cost"]
+            # cost = info.get("cost", 0.0)
+            barrier_value = agent.safe_value.apply_fn({"params": agent.safe_value.params}, jnp.expand_dims(obs, axis=0)).item()
+            violation = int(barrier_value >0)
             episode_ret += reward
             episode_len += 1
             episode_cost += cost
+            episode_violations += violation
             if terminated or truncated:
                 break
         episode_rets.append(episode_ret)
         episode_lens.append(episode_len)
         episode_costs.append(episode_cost)
+        episode_barrier_violations.append(episode_violations)
 
     return {"return": np.mean(episode_rets), "episode_len": np.mean(episode_lens), "cost": np.mean(episode_costs)}
+        # "barrier_violations": np.mean(episode_barrier_violations),
+        # "constraint_satisfaction_rate": 1.0 - np.mean(episode_barrier_violations) / np.mean(episode_lens)
 
 def evaluate_pr(
     agent, env: gym.Env, num_episodes: int) -> Dict[str, float]:
