@@ -97,6 +97,7 @@ class CBF(Agent):
     mask_unsafe_for_actor: bool #= False
     max_weight: float
     qh_penalty_scale: float
+    actor_architecture: str
 
     @classmethod
     def create(
@@ -343,7 +344,8 @@ class CBF(Agent):
             r_min=r_min,
             mask_unsafe_for_actor=mask_unsafe_for_actor,
             max_weight=max_weight,
-            qh_penalty_scale=qh_penalty_scale
+            qh_penalty_scale=qh_penalty_scale,
+            actor_architecture=actor_architecture
         )
 
     def cbf_loss_fn(self, cbf_params, batch):
@@ -725,7 +727,7 @@ class CBF(Agent):
 
 
     @jax.jit
-    def eval_actions_jit(self, observations: jnp.ndarray):
+    def eval_actions_jit_gaussian(self, observations: jnp.ndarray):
         observations = jnp.expand_dims(observations, axis = 0)
         dist = self.score_model.apply_fn(
             {"params": self.score_model.params}, observations
@@ -734,8 +736,9 @@ class CBF(Agent):
         return actions
 
     def eval_actions(self, observations: jnp.ndarray, model_cls="gdcbf"):
-        observations = jax.device_put(observations)
-        return self.eval_actions_jit(observations), self
+        if self.actor_architecture == "gaussian":
+            observations = jax.device_put(observations)
+            return self.eval_actions_jit_gaussian(observations), self
 
         dist = self.score_model.apply_fn(
             {"params": self.score_model.params}, observations
@@ -861,42 +864,42 @@ class CBF(Agent):
     @jax.jit
     def update(self, batch: DatasetDict):
         new_agent = self
-        batch_size = int(batch['observations'].shape[0]/2)
+        # batch_size = int(batch['observations'].shape[0]/2)
 
-        def first_half(x):
-            return x[:batch_size]
+        # def first_half(x):
+        #     return x[:batch_size]
+        #
+        # def second_half(x):
+        #     return x[batch_size:]
         
-        def second_half(x):
-            return x[batch_size:]
-        
-        first_batch = jax.tree_util.tree_map(first_half, batch)
-        second_batch = jax.tree_util.tree_map(second_half, batch)
+        # first_batch = jax.tree_util.tree_map(first_half, batch)
+        # second_batch = jax.tree_util.tree_map(second_half, batch)
 
-        new_agent, _ = new_agent.update_actor_awr(first_batch)
+        new_agent, actor_info = new_agent.update_actor_awr(batch)
         # new_agent, actor_info = new_agent.update_actor(second_batch)
 
 
-        def slice(x):
-            return x[:256]
+        # def slice(x):
+        #     return x[:256]
         
-        mini_batch = jax.tree_util.tree_map(slice, batch)
+        # mini_batch = jax.tree_util.tree_map(slice, batch)
         # new_agent, critic_info = new_agent.update_v(mini_batch)
         # new_agent, value_info = new_agent.update_q(mini_batch)
         # new_agent, safe_critic_info = new_agent.update_vc(mini_batch)
         # new_agent, safe_value_info = new_agent.update_qc(mini_batch)
         # new_agent, _ = new_agent.update_actor(mini_batch)
-        new_agent,cbf_info = new_agent.update_cbf(mini_batch)
+        new_agent,cbf_info = new_agent.update_cbf(batch)
         # new_agent, _ = new_agent.update_cbf(first_batch)
         # new_agent, cbf_info = new_agent.update_cbf(second_batch)
         # assert not tree_has_nan(new_agent.safe_critic.params), "NaN in safe_critic params after update"
         # assert not tree_has_nan(new_agent.safe_value.params), "NaN in safe_value params after update"
         # new_agent, _ = new_agent.update_reward_critic(first_batch)
-        new_agent, reward_info = new_agent.update_reward_critic(mini_batch)
+        new_agent, reward_info = new_agent.update_reward_critic(batch)
         # new_agent, _ = new_agent.update_value(first_batch)
-        new_agent, value_info = new_agent.update_value(mini_batch)
+        new_agent, value_info = new_agent.update_value(batch)
 
         return new_agent, {
-            # **actor_info, 
+            **actor_info, 
             # **critic_info, 
             **value_info, 
             # **safe_critic_info, 

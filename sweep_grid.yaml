@@ -1,0 +1,32 @@
+program: launcher/examples/train_offline.py
+method: grid
+project: safe-cbf
+metric:
+  # goal: maximize
+  goal: minimize
+  # name: score
+  name: cost
+
+parameters:
+  seed:
+    values: [0, 10, 20]
+
+  env_id:
+    values: [0, 1, 6, 7]
+
+  cost_critic_hyperparam:
+    values: [0.7, 0.8, 0.9]
+ 
+command:
+  - python
+  - launcher/examples/train_offline.py
+  - --config
+  - configs/train_config.py:gdcbf
+
+
+# - ${env_id}
+  
+ # env_name:
+  #   values: ["PointRobot", "OfflineMetadrive-mediumsparse-v0"]
+  # pr_data:
+  #   values: ["data/point_robot-expert-random-100k.hdf5"]

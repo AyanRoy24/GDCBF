@@ -73,7 +73,7 @@ def call_main(details):
     for i in trange(details['max_steps'], smoothing=0.1, desc=details['experiment_name']):
         sample = ds.sample_jax(details['batch_size'])     
         agent, info = agent.update(sample)
-        if i % details['log_interval'] == 0:
+        if (i+1) % details['log_interval'] == 0:
             wandb.log({f"train/{k}": v for k, v in info.items()}, step=i)
         if (i+1) % details['eval_interval'] == 0:
             agent.save(f"./results/{details['group']}/{details['experiment_name']}", save_time)
