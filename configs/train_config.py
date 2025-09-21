@@ -3,11 +3,11 @@ import numpy as np
 
 def get_config(config_string):
     base_real_config = dict(
-        project='FISOR',
+        project='safe-cbf',
         seed=-1,
-        max_steps=200001,
+        max_steps=100_000,
         eval_episodes=20,
-        batch_size=2048, #Actor batch size x 2 (so really 1024), critic is fixed to 256
+        batch_size=512, #Actor batch size x 2 (so really 1024), critic is fixed to 256
         log_interval=1000,
         eval_interval=25000,
         normalize_returns=True,
@@ -91,17 +91,18 @@ def get_config(config_string):
                     actor_layer_norm=True,
                     value_layer_norm=False,
                     actor_tau=0.001,
-                    actor_architecture='mlp',
+                    actor_architecture='gaussian',
                     critic_objective='expectile',
                     critic_hyperparam = 0.9,
-                    cost_critic_hyperparam = 0.9,
-                    critic_type="qc", #[hj, qc] #qc = Q-critic, which is standard in reinforcement learning for estimating action values.
+                    cost_critic_hyperparam = 0.8,
+                    critic_type="hj", #[hj, qc] #qc = Q-critic, which is standard in reinforcement learning for estimating action values.
                     cost_ub=150,
                     beta_schedule='linear',
                     actor_objective="bc",#[bc,feasibility] 
                     sampling_method="dpm_solver-1", 
                     extract_method="minqc",#[minqc, maxq]
                     max_weight = 100.0,
+                    qh_penalty_scale = 1.0
                 ),
                 dataset_kwargs=dict(
                     **base_data_config,

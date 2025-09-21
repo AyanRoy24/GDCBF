@@ -2,6 +2,8 @@ from typing import Callable, Optional, Sequence
 import flax.linen as nn
 import jax.numpy as jnp
 import flax
+import distrax
+
 
 default_init = nn.initializers.xavier_uniform
 
@@ -45,3 +47,41 @@ class MLP(nn.Module):
                     )
                 x = self.activations(x)
         return x
+
+
+class GaussianPolicy(nn.Module):
+    hidden_dims: Sequence[int]
+    action_dim: int
+    log_std_min: Optional[float] = -20
+    log_std_max: Optional[float] = 2
+    # droupout_rate: float = 0.25
+    tanh_squash_distribution: bool  = False
+
+    @nn.compact
+    def __call__(
+        self, observations: jnp.ndarray, temperature: float = 1.0,
+        # training: bool = False
+    ) -> distrax.Distribution:
+        outputs = MLP(
+            self.hidden_dims,
+            activate_final=True,
+        )(observations)
+        # if self.droupout_rate > 0:
+        #     outputs = nn.Dropout(rate=self.droupout_rate, deterministic=not training)(outputs)
+
+        means = nn.Dense(
+            self.action_dim, kernel_init=default_init()
+        )(outputs)
+        log_stds = nn.Dense(self.action_dim, kernel_init=default_init())(outputs) #self.param("log_stds", nn.initializers.zeros, (self.action_dim,))
+        log_stds = jnp.clip(log_stds, self.log_std_min, self.log_std_max)
+        if not self.tanh_squash_distribution:
+            means = nn.tanh(means)
+
+        base_dist = distrax.MultivariateNormalDiag(loc=means,
+                                                scale_diag=jnp.exp(log_stds) * temperature)
+        if self.tanh_squash_distribution:
+            tanh_bijector = distrax.Block(distrax.Tanh(), ndims=1)
+            return distrax.Transformed(base_dist, tanh_bijector)
+        else:
+            return base_dist
+
