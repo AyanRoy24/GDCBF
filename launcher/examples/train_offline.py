@@ -75,7 +75,7 @@ def call_main(details):
         agent, info = agent.update(sample)
         if i % details['log_interval'] == 0:
             wandb.log({f"train/{k}": v for k, v in info.items()}, step=i)
-        if i % details['eval_interval'] == 0:
+        if (i+1) % details['eval_interval'] == 0:
             agent.save(f"./results/{details['group']}/{details['experiment_name']}", save_time)
             save_time += 1
             if details['env_name'] == 'PointRobot':

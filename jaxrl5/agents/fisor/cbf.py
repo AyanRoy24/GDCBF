@@ -1,7 +1,7 @@
 """Implementations of algorithms for continuous control."""
 import os
 from functools import partial
-from typing import Dict, Optional, Sequence, Tuple, Union
+from typing import Dict, Optional, Sequence, Tuple, Union, Any
 import flax.linen as nn
 from flax.core import FrozenDict
 import gymnasium as gym 
@@ -15,7 +15,7 @@ from flax import struct
 import numpy as np
 from jaxrl5.agents.agent import Agent
 from jaxrl5.data.dataset import DatasetDict
-from jaxrl5.networks import MLP, Ensemble, StateActionValue, StateValue, Relu_StateActionValue, Relu_StateValue, DDPM, FourierFeatures, cosine_beta_schedule, ddpm_sampler, MLPResNet, get_weight_decay_mask, vp_beta_schedule
+from jaxrl5.networks import MLP, Ensemble, StateActionValue, StateValue, Relu_StateActionValue, Relu_StateValue, DDPM, FourierFeatures, cosine_beta_schedule, ddpm_sampler, MLPResNet, get_weight_decay_mask, vp_beta_schedule, GaussianPolicy
 from jaxrl5.networks.diffusion import dpm_solver_sampler_1st, vp_sde_schedule
 
 max_weight = 100
@@ -96,6 +96,7 @@ class CBF(Agent):
     r_min: float #= -1.0
     mask_unsafe_for_actor: bool #= False
     max_weight: float
+    qh_penalty_scale: float
 
     @classmethod
     def create(
@@ -146,6 +147,7 @@ class CBF(Agent):
         r_min: float = -1.0,
         mask_unsafe_for_actor: bool = False,
         max_weight: float = 100.0,  
+        qh_penalty_scale: float = 1.0
         # **kwargs,
     ):
 
@@ -175,6 +177,7 @@ class CBF(Agent):
                                 activations=mish,
                                 activate_final=False)
         
+        print("Actor activation:", actor_architecture)
         if decay_steps is not None:
             actor_lr = optax.cosine_decay_schedule(actor_lr, decay_steps)
 
@@ -202,13 +205,20 @@ class CBF(Agent):
                              cond_encoder_cls=cond_model_cls,
                              reverse_encoder_cls=base_model_cls)
 
+        elif actor_architecture == "gaussian":
+            actor_def = GaussianPolicy(hidden_dims=actor_hidden_dims, action_dim=action_dim)
+
         else:
             raise ValueError(f'Invalid actor architecture: {actor_architecture}')
         
         time = jnp.zeros((1, 1))
         observations = jnp.expand_dims(observations, axis = 0)
         actions = jnp.expand_dims(actions, axis = 0)
-        actor_params = actor_def.init(actor_key, observations, actions,
+        if actor_architecture == "gaussian":
+            actor_params = actor_def.init(actor_key, observations,
+                                            time)['params']
+        else:
+            actor_params = actor_def.init(actor_key, observations, actions,
                                         time)['params']
         
         actor_params = FrozenDict(actor_params) 
@@ -333,12 +343,13 @@ class CBF(Agent):
             r_min=r_min,
             mask_unsafe_for_actor=mask_unsafe_for_actor,
             max_weight=max_weight,
+            qh_penalty_scale=qh_penalty_scale
         )
 
     def cbf_loss_fn(self, cbf_params, batch):
         # Implements cost critic update using FISOR backup (see #file:fisor_gdcbf.png)
         # h_s = batch["costs"]  # h(s)
-        h_s = -batch["costs"]  # h(s) as negative cost
+        h_s = batch["costs"]  # h(s) as negative cost
         next_v = self.safe_value.apply_fn({"params": self.safe_value.params}, batch["next_observations"])
         phi = phi_fisor(h_s, next_v, self.cbf_gamma)
         qcs = self.safe_critic.apply_fn({"params": cbf_params}, batch["observations"], batch["actions"])
@@ -358,13 +369,13 @@ class CBF(Agent):
         safe_target_critic = self.safe_target_critic.replace(params=safe_target_critic_params)
 
         # Update safe_value using expectile loss (not safe_expectile)
-        h_s = -batch["costs"]
+        h_s = batch["costs"]
         # h_s = batch["costs"]
         next_v = self.safe_value.apply_fn({"params": self.safe_value.params}, batch["next_observations"])
         phi = phi_fisor(h_s, next_v, self.cbf_gamma)
         def safe_value_loss_fn(safe_value_params):
             v = self.safe_value.apply_fn({"params": safe_value_params}, batch["observations"])
-            value_loss = expectile_loss(phi - v, self.cbf_expectile_tau).mean()
+            value_loss = expectile_loss(phi - v, (1-self.cost_critic_hyperparam)).mean()
             # value_loss = expectile_loss(phi - v, 1- self.cost_critic_hyperparam).mean()
             # value_loss = expectile_loss(phi - v, 0.3).mean()
             # Add clipping to prevent NaNs
@@ -392,8 +403,9 @@ class CBF(Agent):
         mask_safe = (qh <= 0)
         target = (
             mask_safe * (batch["rewards"] + self.discount * batch["masks"] * next_vr)
-            + mask_unsafe * (self.r_min / (1 - self.discount) - qh)
+            + mask_unsafe * (self.r_min / (1 - self.discount) - qh*self.qh_penalty_scale)
         )
+        # jax.debug.print("mask {a} {b} {c}", a=mask_unsafe.sum(), b=mask_safe.sum(), c=qh)
         return target
     
 
@@ -435,7 +447,7 @@ class CBF(Agent):
         qs = self.target_critic.apply_fn({"params": self.target_critic.params}, batch["observations"], batch["actions"]).min(axis=0)
         v = self.value.apply_fn({"params": value_params}, batch["observations"])
         # loss = expectile_loss(qs - v, 1- self.critic_hyperparam).mean()
-        loss = expectile_loss(qs - v, 1- self.critic_hyperparam).mean()
+        loss = expectile_loss(qs - v, self.critic_hyperparam).mean()
         # loss = expectile_loss(qs - v, 0.3).mean()
         return loss, {"value_loss": loss, "v": v.mean()}
 
@@ -565,6 +577,46 @@ class CBF(Agent):
         return new_agent, info
 
 
+    def update_actor_awr(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
+
+        qs = agent.target_critic.apply_fn(
+            {"params": agent.target_critic.params},
+            batch["observations"],
+            batch["actions"],
+        )
+        q = qs.min(axis=0)
+        v = agent.value.apply_fn(
+            {"params": agent.value.params}, batch["observations"]
+        )
+        
+        # qcs = agent.safe_target_critic.apply_fn(
+        #     {"params": agent.safe_target_critic.params},
+        #     batch["observations"],
+        #     batch["actions"],
+        # )
+        # qc = qcs.max(axis=0)
+        # vc = agent.safe_value.apply_fn(
+        #         {"params": agent.safe_value.params}, batch["observations"]
+        #     )
+
+        def actor_loss_fn(actor_params: FrozenDict[str, Any]):
+            dist = agent.score_model.apply_fn(
+                {"params": actor_params}, batch["observations"]
+            )
+
+            log_probs = dist.log_prob(batch['actions'])
+            weights = jnp.exp((q - v) * agent.reward_temperature)
+            weights = jnp.clip(weights, 0, 100)
+            return -(log_probs * weights).mean(), {"weights": weights.mean(), "log_probs": log_probs.mean()}
+
+        grads, info = jax.grad(actor_loss_fn, has_aux=True)(agent.score_model.params)
+        score_model = agent.score_model.apply_gradients(grads=grads)
+        agent = agent.replace(score_model=score_model)
+        return agent, info
+
+
+
+
     def update_actor(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
         rng = agent.rng
         key, rng = jax.random.split(rng, 2)
@@ -672,7 +724,26 @@ class CBF(Agent):
         return new_agent, info
 
 
+    @jax.jit
+    def eval_actions_jit(self, observations: jnp.ndarray):
+        observations = jnp.expand_dims(observations, axis = 0)
+        dist = self.score_model.apply_fn(
+            {"params": self.score_model.params}, observations
+        )
+        actions = dist.mean().squeeze()
+        return actions
+
     def eval_actions(self, observations: jnp.ndarray, model_cls="gdcbf"):
+        observations = jax.device_put(observations)
+        return self.eval_actions_jit(observations), self
+
+        dist = self.score_model.apply_fn(
+            {"params": self.score_model.params}, observations
+        )
+        # print(">",  dist)
+        actions = dist.mean().squeeze()
+        # print(actions)
+        return actions, self
         # if model_cls == "gdcbf":
         #     # Direct deterministic action selection (e.g., mean action)
         #     # If score_model is a deterministic policy, use its output
@@ -801,8 +872,9 @@ class CBF(Agent):
         first_batch = jax.tree_util.tree_map(first_half, batch)
         second_batch = jax.tree_util.tree_map(second_half, batch)
 
-        new_agent, _ = new_agent.update_actor(first_batch)
-        new_agent, actor_info = new_agent.update_actor(second_batch)
+        new_agent, _ = new_agent.update_actor_awr(first_batch)
+        # new_agent, actor_info = new_agent.update_actor(second_batch)
+
 
         def slice(x):
             return x[:256]
