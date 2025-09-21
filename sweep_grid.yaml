@@ -18,10 +18,13 @@ parameters:
     values: [0.7, 0.8, 0.9]
  
 command:
+  - ${env}
+  - XLA_PYTHON_CLIENT_PREALLOCATE=False 
   - python
   - launcher/examples/train_offline.py
   - --config
   - configs/train_config.py:gdcbf
+  - ${args}
 
 
 # - ${env_id}

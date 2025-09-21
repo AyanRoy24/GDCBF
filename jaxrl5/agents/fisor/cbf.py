@@ -97,7 +97,7 @@ class CBF(Agent):
     mask_unsafe_for_actor: bool #= False
     max_weight: float
     qh_penalty_scale: float
-    actor_architecture: str
+    # actor_architecture: str
 
     @classmethod
     def create(
@@ -345,7 +345,7 @@ class CBF(Agent):
             mask_unsafe_for_actor=mask_unsafe_for_actor,
             max_weight=max_weight,
             qh_penalty_scale=qh_penalty_scale,
-            actor_architecture=actor_architecture
+            # actor_architecture=actor_architecture
         )
 
     def cbf_loss_fn(self, cbf_params, batch):
@@ -727,7 +727,7 @@ class CBF(Agent):
 
 
     @jax.jit
-    def eval_actions_jit_gaussian(self, observations: jnp.ndarray):
+    def eval_actions_jit(self, observations: jnp.ndarray):
         observations = jnp.expand_dims(observations, axis = 0)
         dist = self.score_model.apply_fn(
             {"params": self.score_model.params}, observations
@@ -736,9 +736,9 @@ class CBF(Agent):
         return actions
 
     def eval_actions(self, observations: jnp.ndarray, model_cls="gdcbf"):
-        if self.actor_architecture == "gaussian":
-            observations = jax.device_put(observations)
-            return self.eval_actions_jit_gaussian(observations), self
+        # if self.actor_architecture == ""
+        observations = jax.device_put(observations)
+        return self.eval_actions_jit(observations), self
 
         dist = self.score_model.apply_fn(
             {"params": self.score_model.params}, observations

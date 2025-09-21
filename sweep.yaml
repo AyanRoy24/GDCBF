@@ -126,6 +126,7 @@ command:
   - 28
   - --config
   - configs/train_config.py:gdcbf
+  - ${args}
 
 
 # - ${env_id}
