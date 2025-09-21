@@ -90,7 +90,10 @@ def call_main(details):
             # score = eval_info["return"] - eval_info["cost"]  # Or use another formula
             # # score = eval_info["return"] - 10 * eval_info["cost"]
             # wandb.log({"eval/score": score, **{f"eval/{k}": v for k, v in eval_info.items()}}, step=i)
-
+    cost = eval_info["cost"]
+    ret = eval_info["return"]
+    wandb.run.summary["cost"] = cost
+    wandb.run.summary["return"] = ret
    
    
 def main(_):

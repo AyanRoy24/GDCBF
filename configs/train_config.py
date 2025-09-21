@@ -5,7 +5,7 @@ def get_config(config_string):
     base_real_config = dict(
         project='FISOR',
         seed=-1,
-        max_steps=100001,
+        max_steps=200001,
         eval_episodes=20,
         batch_size=2048, #Actor batch size x 2 (so really 1024), critic is fixed to 256
         log_interval=1000,
@@ -81,8 +81,8 @@ def get_config(config_string):
                     cost_temperature=5,
                     reward_temperature=3,
                     T=5,
-                    N=16,
-                    M=0,
+                    N=16, # samples per observation
+                    M=0,# how many times the last step of the diffusion sampling process should be repeated
                     clip_sampler=True,
                     actor_dropout_rate=0.1,
                     actor_num_blocks=3,
@@ -91,16 +91,17 @@ def get_config(config_string):
                     actor_layer_norm=True,
                     value_layer_norm=False,
                     actor_tau=0.001,
-                    actor_architecture='ln_resnet',
+                    actor_architecture='mlp',
                     critic_objective='expectile',
                     critic_hyperparam = 0.9,
                     cost_critic_hyperparam = 0.9,
-                    critic_type="hj", #[hj, qc]
+                    critic_type="qc", #[hj, qc] #qc = Q-critic, which is standard in reinforcement learning for estimating action values.
                     cost_ub=150,
-                    beta_schedule='vp',
-                    actor_objective="feasibility", 
-                    sampling_method="ddpm", 
-                    extract_method="minqc",
+                    beta_schedule='linear',
+                    actor_objective="bc",#[bc,feasibility] 
+                    sampling_method="dpm_solver-1", 
+                    extract_method="minqc",#[minqc, maxq]
+                    max_weight = 100.0,
                 ),
                 dataset_kwargs=dict(
                     **base_data_config,
