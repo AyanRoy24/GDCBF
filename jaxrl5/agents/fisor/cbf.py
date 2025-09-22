@@ -348,18 +348,43 @@ class CBF(Agent):
             # actor_architecture=actor_architecture
         )
 
+    # def cbf_loss_fn(self, cbf_params, batch):
+    #     # Implements cost critic update using FISOR backup (see #file:fisor_gdcbf.png)
+    #     # h_s = batch["costs"]  # h(s)
+    #     h_s = batch["costs"]  # h(s) as negative cost
+    #     next_v = self.safe_value.apply_fn({"params": self.safe_value.params}, batch["next_observations"])
+    #     phi = phi_fisor(h_s, next_v, self.cbf_gamma)
+    #     qcs = self.safe_critic.apply_fn({"params": cbf_params}, batch["observations"], batch["actions"])
+    #     loss = ((qcs - phi) ** 2).mean()
+    #     # Admissibility penalty (see Theorem 4.1)
+    #     # admissibility_violation = jnp.maximum(phi - h_s, 0).mean()
+    #     # total_loss = loss + self.cbf_admissibility_coef * admissibility_violation
+    #     return loss, {"cbf_loss": loss} #, "admissibility_violation": admissibility_violation}
+
+
     def cbf_loss_fn(self, cbf_params, batch):
-        # Implements cost critic update using FISOR backup (see #file:fisor_gdcbf.png)
-        # h_s = batch["costs"]  # h(s)
-        h_s = batch["costs"]  # h(s) as negative cost
+        # IQL-like objective for cost critic (Q^h) and value (V^h)
+        # Q^h(s,a) <- max{h(s), V^h(s')}
+        h_s = batch["costs"]  # h(s)
         next_v = self.safe_value.apply_fn({"params": self.safe_value.params}, batch["next_observations"])
-        phi = phi_fisor(h_s, next_v, self.cbf_gamma)
-        qcs = self.safe_critic.apply_fn({"params": cbf_params}, batch["observations"], batch["actions"])
-        loss = ((qcs - phi) ** 2).mean()
-        # Admissibility penalty (see Theorem 4.1)
-        # admissibility_violation = jnp.maximum(phi - h_s, 0).mean()
-        # total_loss = loss + self.cbf_admissibility_coef * admissibility_violation
-        return loss, {"cbf_loss": loss} #, "admissibility_violation": admissibility_violation}
+        target_qh = jnp.maximum(h_s, next_v)  # Q^h target
+
+        qh_pred = self.safe_critic.apply_fn({"params": cbf_params}, batch["observations"], batch["actions"])
+        qh_loss = ((qh_pred - target_qh) ** 2).mean()
+
+        # V^h(s) <- min_a Q^h(s,a), learned via expectile regression
+        def vh_loss_fn(safe_value_params):
+            vh_pred = self.safe_value.apply_fn({"params": safe_value_params}, batch["observations"])
+            # min_a Q^h(s,a)
+            qh_all = self.safe_critic.apply_fn({"params": cbf_params}, batch["observations"], batch["actions"])
+            min_qh = qh_all.min(axis=0)
+            vh_loss = expectile_loss(min_qh - vh_pred, self.cbf_expectile_tau).mean()
+            return vh_loss
+
+        vh_loss = vh_loss_fn(self.safe_value.params)
+
+        total_loss = qh_loss + vh_loss
+        return total_loss, {"cbf_qh_loss": qh_loss, "cbf_vh_loss": vh_loss, "cbf_total_loss": total_loss}
 
     def update_cbf(self, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
         grads, info = jax.grad(self.cbf_loss_fn, has_aux=True)(self.safe_critic.params, batch)

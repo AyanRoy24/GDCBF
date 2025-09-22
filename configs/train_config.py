@@ -98,7 +98,7 @@ def get_config(config_string):
                     critic_type="hj", #[hj, qc] #qc = Q-critic, which is standard in reinforcement learning for estimating action values.
                     cost_ub=150,
                     beta_schedule='linear',#[cosine, linear, vp]
-                    actor_objective="feasibility",#[bc,feasibility] 
+                    actor_objective="bc",#[bc,feasibility] 
                     sampling_method="dpm_solver-1", #[dpmm_solver-1,  ddpm]
                     extract_method="maxq",#[minqc, maxq]
                     max_weight = 100.0,
