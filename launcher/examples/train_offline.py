@@ -30,6 +30,10 @@ flags.DEFINE_integer('env_id', 30, 'Choose env')
 flags.DEFINE_float('ratio', 1.0, 'dataset ratio')
 flags.DEFINE_string('project', '', 'project name for wandb')
 flags.DEFINE_string('experiment_name', '', 'experiment name for wandb')
+flags.DEFINE_float('cost_critic_hyperparam', 0.9, 'Cost critic hyperparam')
+flags.DEFINE_integer('seed', 44, 'Seed env')
+
+
 config_flags.DEFINE_config_file(
     "config",
     None,
@@ -102,7 +106,11 @@ def main(_):
         parameters['project'] = FLAGS.project
     parameters['env_name'] = env_list[FLAGS.env_id]
     parameters['ratio'] = FLAGS.ratio
+
+    parameters['agent_kwargs']['cost_critic_hyperparam'] = FLAGS.cost_critic_hyperparam
+
     parameters['group'] = parameters['env_name']
+    parameters['seed'] = FLAGS.seed
 
     parameters['experiment_name'] = parameters['agent_kwargs']['sampling_method'] + '_' \
                                 + parameters['agent_kwargs']['actor_objective'] + '_' \

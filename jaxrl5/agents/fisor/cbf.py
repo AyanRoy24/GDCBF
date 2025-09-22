@@ -727,7 +727,7 @@ class CBF(Agent):
 
 
     @jax.jit
-    def eval_actions_jit_gaussian(self, observations: jnp.ndarray):
+    def eval_actions_jit(self, observations: jnp.ndarray):
         observations = jnp.expand_dims(observations, axis = 0)
         dist = self.score_model.apply_fn(
             {"params": self.score_model.params}, observations
@@ -736,9 +736,15 @@ class CBF(Agent):
         return actions
 
     def eval_actions(self, observations: jnp.ndarray, model_cls="gdcbf"):
+#<<<<<<< updated
+        # if self.actor_architecture == ""
+        observations = jax.device_put(observations)
+        return self.eval_actions_jit(observations), self
+#=======
         # if self.actor_architecture == 'gaussian':
         observations = jax.device_put(observations)
         return self.eval_actions_jit_gaussian(observations), self
+#>>>>>>> main
 
         dist = self.score_model.apply_fn(
             {"params": self.score_model.params}, observations
