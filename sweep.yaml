@@ -20,9 +20,9 @@ parameters:
   cbf_expectile_tau:
     distribution: uniform
     min: 0.1
-    max: 0.3
-  # r_min:
-  #   values: [-1.0, 10.0]
+    max: 0.9
+  r_min:
+    values: [1.0, 10.0]
   # max_weight:
   #   distribution: uniform
   #   min: 50.0
@@ -93,8 +93,8 @@ parameters:
   #   max: 0.01
   # critic_objective:
   #   values: ["expectile"]
-  critic_type:
-    values: ["hj", "qc"]
+  # critic_type:
+  #   values: ["hj", "qc"]
   # cost_ub:
   #   values: [100, 150, 200]
   beta_schedule:
@@ -105,16 +105,16 @@ parameters:
   #   values: ["ddpm", "dpm_solver-1"]
   extract_method:
     values: ["minqc", "maxq"]
-  actor_architecture:
-    values: ["ln_resnet", "mlp"]
-  T:
-    values: [5, 10]
-  N:
-    values: [8, 16]
+  # actor_architecture:
+  #   values: ["ln_resnet", "mlp"]
+  # T:
+  #   values: [5, 10]
+  # N:
+  #   values: [8, 16]
   # M:
   #   values: [0, 2]
-  clip_sampler:
-    values: [True, False]
+  # clip_sampler:
+  #   values: [True, False]
   # env_id:
   #   values: [1]
 
@@ -123,10 +123,11 @@ command:
   - python
   - launcher/examples/train_offline.py
   - --env_id
-  - 28
+  - 6
   - --config
   - configs/train_config.py:gdcbf
-  - ${args}
+  
+  # - ${args}
 
 
 # - ${env_id}

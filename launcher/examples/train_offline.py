@@ -21,7 +21,7 @@ from jaxrl5.wrappers import wrap_gym
 from jaxrl5.agents import FISOR, CBF # GDCBF, DCBF
 # from jaxrl5.agents import train_cbf, CBFMLP, CBFTrainState, train_step, update
 from jaxrl5.data.dsrl_datasets import DSRLDataset
-from jaxrl5.evaluation import evaluate, evaluate_pr, plot_cbf_cost_vs_safe_value
+from jaxrl5.evaluation import evaluate, evaluate_pr #, plot_cbf_cost_vs_safe_value, calculate_coverage
 import json
 
 
@@ -31,7 +31,7 @@ flags.DEFINE_float('ratio', 1.0, 'dataset ratio')
 flags.DEFINE_string('project', '', 'project name for wandb')
 flags.DEFINE_string('experiment_name', '', 'experiment name for wandb')
 flags.DEFINE_float('cost_critic_hyperparam', 0.9, 'Cost critic hyperparam')
-flags.DEFINE_integer('seed', 44, 'Seed env')
+# flags.DEFINE_integer('seed', 44, 'Seed env')
 
 
 config_flags.DEFINE_config_file(
@@ -54,6 +54,7 @@ def call_main(details):
     if details['env_name'] == 'PointRobot':
         assert details['dataset_kwargs']['pr_data'] is not None, "No data for Point Robot"
         env = eval(details['env_name'])(id=0, seed=0)
+        # env = eval(details['env_name'])(id=0, seed=details['seed'])
         env_max_steps = env._max_episode_steps
         ds = DSRLDataset(env, critic_type=details['agent_kwargs']['critic_type'], data_location=details['dataset_kwargs']['pr_data'])
     else:
@@ -80,17 +81,19 @@ def call_main(details):
         if (i+1) % details['log_interval'] == 0:
             wandb.log({f"train/{k}": v for k, v in info.items()}, step=i)
         if (i+1) % details['eval_interval'] == 0:
-            agent.save(f"./results/{details['group']}/{details['experiment_name']}", save_time)
-            save_time += 1
+            # agent.save(f"./results/{details['group']}/{details['experiment_name']}", save_time)
+            # save_time += 1
             if details['env_name'] == 'PointRobot':
                 eval_info = evaluate_pr(agent, env, details['eval_episodes'])
             else:
                 eval_info = evaluate(agent, env, details['eval_episodes'])
+                # coverage = calculate_coverage(agent, ds, num_samples=10000)
             if details['env_name'] != 'PointRobot':
                 eval_info["normalized_return"], eval_info["normalized_cost"] = env.get_normalized_score(eval_info["return"], eval_info["cost"])
-            modeldir = f"./results/{details['group']}/{details['experiment_name']}"
-            plot_cbf_cost_vs_safe_value(agent, ds, modeldir)
+            # modeldir = f"./results/{details['group']}/{details['experiment_name']}"
+            # plot_cbf_cost_vs_safe_value(agent, ds, modeldir)
             wandb.log({f"eval/{k}": v for k, v in eval_info.items()}, step=i)
+            # wandb.log({"eval/coverage": coverage}, step=i)
             # score = eval_info["return"] - eval_info["cost"]  # Or use another formula
             # # score = eval_info["return"] - 10 * eval_info["cost"]
             # wandb.log({"eval/score": score, **{f"eval/{k}": v for k, v in eval_info.items()}}, step=i)
@@ -110,7 +113,7 @@ def main(_):
     parameters['agent_kwargs']['cost_critic_hyperparam'] = FLAGS.cost_critic_hyperparam
 
     parameters['group'] = parameters['env_name']
-    parameters['seed'] = FLAGS.seed
+    # parameters['seed'] = FLAGS.seed
 
     parameters['experiment_name'] = parameters['agent_kwargs']['sampling_method'] + '_' \
                                 + parameters['agent_kwargs']['actor_objective'] + '_' \

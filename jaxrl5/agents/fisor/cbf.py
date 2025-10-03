@@ -386,7 +386,7 @@ class CBF(Agent):
         total_loss = qh_loss + vh_loss
         return total_loss, {"cbf_qh_loss": qh_loss, "cbf_vh_loss": vh_loss, "cbf_total_loss": total_loss}
 
-    def update_cbf(self, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
+    def update_cbf_old(self, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
         grads, info = jax.grad(self.cbf_loss_fn, has_aux=True)(self.safe_critic.params, batch)
         safe_critic = self.safe_critic.apply_gradients(grads=grads)
         self = self.replace(safe_critic=safe_critic)
@@ -423,6 +423,43 @@ class CBF(Agent):
         return self.replace(safe_critic=safe_critic, safe_target_critic=safe_target_critic, safe_value=safe_value), {**info, **info_v}
     
     
+
+
+    def update_cbf(self, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
+        def joint_cbf_loss_fn(params, batch):
+            # params: {'safe_critic': ..., 'safe_value': ...}
+            h_s = batch["costs"]
+            next_v = self.safe_value.apply_fn({"params": params['safe_value']}, batch["next_observations"])
+            target_qh = jnp.maximum(h_s, next_v)
+            qh_pred = self.safe_critic.apply_fn({"params": params['safe_critic']}, batch["observations"], batch["actions"])
+            qh_loss = ((qh_pred - target_qh) ** 2).mean()
+
+            vh_pred = self.safe_value.apply_fn({"params": params['safe_value']}, batch["observations"])
+            min_qh = qh_pred.min(axis=0)
+            vh_loss = expectile_loss(min_qh - vh_pred, self.cbf_expectile_tau).mean()
+
+            cbf_loss = qh_loss + vh_loss
+            return cbf_loss, {
+                "cbf_loss": cbf_loss,
+                # "cbf_qh_loss": qh_loss,
+                # "cbf_vh_loss": vh_loss
+            }
+
+        params = {'safe_critic': self.safe_critic.params, 'safe_value': self.safe_value.params}
+        grads, info = jax.grad(joint_cbf_loss_fn, has_aux=True)(params, batch)
+
+        safe_critic = self.safe_critic.apply_gradients(grads=grads['safe_critic'])
+        safe_value = self.safe_value.apply_gradients(grads=grads['safe_value'])
+        self = self.replace(safe_critic=safe_critic, safe_value=safe_value)
+
+        safe_target_critic_params = optax.incremental_update(
+            safe_critic.params, self.safe_target_critic.params, self.tau
+        )
+        safe_target_critic = self.safe_target_critic.replace(params=safe_target_critic_params)
+
+        return self.replace(safe_critic=safe_critic, safe_target_critic=safe_target_critic, safe_value=safe_value), info
+
+
     def reward_piecewise_target(self, batch):
         qh = self.safe_critic.apply_fn({"params": self.safe_critic.params}, batch["observations"], batch["actions"]).max(axis=0)
         next_vr = self.value.apply_fn({"params": self.value.params}, batch["next_observations"])
@@ -440,7 +477,7 @@ class CBF(Agent):
         target_q = self.reward_piecewise_target(batch)
         qs = self.critic.apply_fn({"params": critic_params}, batch["observations"], batch["actions"])
         loss = ((qs - target_q) ** 2).mean()
-        return loss, {"reward_loss": loss, "q": qs.mean()}
+        return loss, {"q_r_loss": loss, "q_r": qs.mean()}
 
     def update_reward_critic(self, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
         grads, info = jax.grad(self.reward_loss_piecewise_fn, has_aux=True)(self.critic.params, batch)
@@ -476,7 +513,7 @@ class CBF(Agent):
         # loss = expectile_loss(qs - v, 1- self.critic_hyperparam).mean()
         loss = expectile_loss(qs - v, self.critic_hyperparam).mean()
         # loss = expectile_loss(qs - v, 0.3).mean()
-        return loss, {"value_loss": loss, "v": v.mean()}
+        return loss, {"v_r_loss": loss, "v_r": v.mean()}
 
     def update_value(self, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
         grads, info = jax.grad(self.value_loss_fn, has_aux=True)(self.value.params, batch)
@@ -930,7 +967,7 @@ class CBF(Agent):
         new_agent, value_info = new_agent.update_value(batch)
 
         return new_agent, {
-            **actor_info, 
+            # **actor_info, 
             # **critic_info, 
             **value_info, 
             # **safe_critic_info, 
