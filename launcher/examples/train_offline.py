@@ -37,7 +37,7 @@ flags.DEFINE_float('cost_critic_hyperparam', 0.9, 'Cost critic hyperparam')
 config_flags.DEFINE_config_file(
     "config",
     None,
-    "File path to the training hyperparameter configuration.",
+    "../../configs/train_config.py",
     lock_config=False,
 )
 
@@ -92,11 +92,9 @@ def call_main(details):
                 eval_info["normalized_return"], eval_info["normalized_cost"] = env.get_normalized_score(eval_info["return"], eval_info["cost"])
             # modeldir = f"./results/{details['group']}/{details['experiment_name']}"
             # plot_cbf_cost_vs_safe_value(agent, ds, modeldir)
+            print ({f"eval/{k}": v for k, v in eval_info.items()})
             wandb.log({f"eval/{k}": v for k, v in eval_info.items()}, step=i)
-            # wandb.log({"eval/coverage": coverage}, step=i)
-            # score = eval_info["return"] - eval_info["cost"]  # Or use another formula
-            # # score = eval_info["return"] - 10 * eval_info["cost"]
-            # wandb.log({"eval/score": score, **{f"eval/{k}": v for k, v in eval_info.items()}}, step=i)
+            
     cost = eval_info["cost"]
     ret = eval_info["return"]
     wandb.run.summary["cost"] = cost
@@ -115,12 +113,13 @@ def main(_):
     parameters['group'] = parameters['env_name']
     # parameters['seed'] = FLAGS.seed
 
-    parameters['experiment_name'] = parameters['agent_kwargs']['sampling_method'] + '_' \
-                                + parameters['agent_kwargs']['actor_objective'] + '_' \
-                                + parameters['agent_kwargs']['critic_type'] + '_N' \
-                                + str(parameters['agent_kwargs']['N']) + '_' \
-                                + parameters['agent_kwargs']['extract_method'] if FLAGS.experiment_name == '' else FLAGS.experiment_name
-    parameters['experiment_name'] += '_' + str(datetime.date.today()) + '_s' + str(parameters['seed']) + '_' + str(random.randint(0,1000))
+    # parameters['experiment_name'] = parameters['agent_kwargs']['sampling_method'] + '_' \
+    #                             + parameters['agent_kwargs']['actor_objective'] + '_' \
+    #                             + parameters['agent_kwargs']['critic_type'] + '_N' \
+    #                             + str(parameters['agent_kwargs']['N']) + '_' \
+    #                             + parameters['agent_kwargs']['extract_method'] if FLAGS.experiment_name == '' else FLAGS.experiment_name
+    # parameters['experiment_name'] += '_' + str(env_list[FLAGS.env_id]) + '_' + str(parameters['env_name']) + '_' + str(datetime.date.today()) + '_s' + str(parameters['seed']) + '_' + str(random.randint(0,1000))
+    parameters['experiment_name'] = str(FLAGS.env_id) + '_' + str(parameters['env_name']) 
 
     if parameters['env_name'] == 'PointRobot':
         parameters['max_steps'] = 100001

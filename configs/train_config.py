@@ -3,7 +3,7 @@ import numpy as np
 
 def get_config(config_string):
     base_real_config = dict(
-        project='cbf',
+        project='cbf1',
         seed=-1,
         # seed=np.random.randint(1000),
         max_steps=100_000,
@@ -71,7 +71,7 @@ def get_config(config_string):
                     cbf_admissibility_coef = 1e-3,
                     # safe_reward_mode = "piecewise",   # or "penalty"
                     unsafe_penalty_alpha = 1.0,
-                    r_min = 1.0,
+                    r_min = -0.1,
                     mask_unsafe_for_actor = False,
 
 
