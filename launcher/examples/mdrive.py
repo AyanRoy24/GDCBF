@@ -13,12 +13,12 @@ import yaml
 from ml_collections import config_flags, ConfigDict
 import wandb
 from tqdm.auto import trange  # noqa
-import gymnasium as gym
+import gym
 from env.env_list import env_list
 from env.point_robot import PointRobot
 from jaxrl5.wrappers import wrap_gym
 from jaxrl5.agents import CBF 
-from jaxrl5.data.dsrl_datasets import DSRLDataset
+from jaxrl5.data.md_datasets import DSRLDataset
 from jaxrl5.evaluation import evaluate, evaluate_pr #, plot_cbf_cost_vs_safe_value, calculate_coverage
 import json
 

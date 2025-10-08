@@ -5,7 +5,7 @@ def get_config(config_string):
     base_real_config = dict(
         project='cbf2',
         seed=-1,
-        max_steps=100_000,
+        max_steps=100001,
         eval_episodes=20,
         batch_size=512, #Actor batch size x 2 (so really 1024), critic is fixed to 256
         log_interval=1000,
