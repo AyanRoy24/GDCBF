@@ -31,26 +31,21 @@ def plot_cbf_cost_vs_safe_value(agent, dataset, modeldir, num_samples=1000):
     plt.close()
     print(f"Plot saved to {save_path}")
 
-def check_coverage(costs: np.ndarray) -> float:
-    """
-    Proportion of states certified as safe (cost <= 0).
-    """
-    return np.mean(costs <= 0)
+def check_coverage(barrier_values):
+    """Fraction of states the CBF certifies as safe."""
+    return np.mean(barrier_values >= 0)
 
-def check_valid(costs: np.ndarray, next_costs: np.ndarray, gamma: float = 0.99) -> float:
-    """
-    Validity: For each state, either safe (cost <= 0) or next_cost >= gamma * cost.
-    """
-    valid_1 = costs <= 0
-    valid_2 = (costs > 0) & (next_costs >= gamma * costs)
-    return np.mean(valid_1 | valid_2)
+def check_valid(barrier_values, next_barrier_values, alpha=0.1):
+    """Fraction of transitions satisfying the discrete-time CBF condition."""
+    valid = next_barrier_values - (1 - alpha) * barrier_values >= 0
+    return np.mean(valid)
+
 
 def evaluate(
     agent, env: gym.Env, num_episodes: int, save_video: bool = False, render: bool = False
 ) -> Dict[str, float]:
-
-    episode_rets, episode_costs, episode_lens, episode_no_safes,episode_barrier_violations = [], [], [], [], []
-    all_costs, all_next_costs = [], []
+    episode_rets, episode_costs, episode_lens = [], [], []
+    barriers, next_barriers = [], []
     for _ in trange(num_episodes, desc="Evaluating", leave=False):
         obs, info = env.reset()
         episode_ret, episode_cost, episode_len, episode_violations = 0.0, 0.0, 0, 0
@@ -60,44 +55,33 @@ def evaluate(
                 env.render()
                 time.sleep(1e-3)
             action, agent = agent.eval_actions(obs)
+            barrier_value = agent.safe_value.apply_fn({"params": agent.safe_value.params},
+                                              jnp.expand_dims(obs, axis=0)).item()
+            barriers.append(barrier_value)
             next_obs, reward, terminated, truncated, info = env.step(action)
+            next_barrier_value = agent.safe_value.apply_fn({"params": agent.safe_value.params},
+                                                   jnp.expand_dims(next_obs, axis=0)).item()
+            next_barriers.append(next_barrier_value)
             cost = info["cost"]
-            # cost = info.get("cost", 0.0)
-            # barrier_value = agent.safe_value.apply_fn({"params": agent.safe_value.params}, jnp.expand_dims(obs, axis=0)).item()
-            # violation = int(barrier_value >0)
             episode_ret += reward
             episode_len += 1
             episode_cost += cost
-            # episode_violations += violation
-             # For coverage/validity
-            all_costs.append(cost)
-            if prev_cost is not None:
-                all_next_costs.append(cost)
-            prev_cost = cost
-
             obs = next_obs
             if terminated or truncated:
                 break
         episode_rets.append(episode_ret)
         episode_lens.append(episode_len)
-        episode_costs.append(episode_cost)
-        # episode_barrier_violations.append(episode_violations)
-    costs_arr = np.array(all_costs)
-    next_costs_arr = np.concatenate([costs_arr[1:], np.array([0])])
+        episode_costs.append(episode_cost)       
+    coverage = check_coverage(jnp.array(barriers))
+    validity = check_valid(jnp.array(barriers), jnp.array(next_barriers))
 
-    coverage = check_coverage(costs_arr)
-    validity = check_valid(costs_arr, next_costs_arr, 0.99)
-    
     return {
         "return": np.mean(episode_rets),
-        "episode_len": np.mean(episode_lens),
         "cost": np.mean(episode_costs),
+        "episode_len": np.mean(episode_lens),
         "coverage": coverage,
         "validity": validity,
     }
-    # return {"return": np.mean(episode_rets), "episode_len": np.mean(episode_lens), "cost": np.mean(episode_costs)}
-        # "barrier_violations": np.mean(episode_barrier_violations),
-        # "constraint_satisfaction_rate": 1.0 - np.mean(episode_barrier_violations) / np.mean(episode_lens)
 
 def evaluate_pr(
     agent, env: gym.Env, num_episodes: int) -> Dict[str, float]:
@@ -120,4 +104,4 @@ def evaluate_pr(
         episode_lens.append(episode_len)
         episode_costs.append(episode_cost)
 
-    return {"return": np.mean(episode_rets), "episode_len": np.mean(episode_lens), "cost": np.mean(episode_costs), "no_safe": np.mean(episode_no_safes)}
+    return {"return": np.mean(episode_rets), "episode_len": np.mean(episode_lens), "cost": np.mean(episode_costs)}

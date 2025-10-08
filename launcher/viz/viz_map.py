@@ -12,11 +12,11 @@ from matplotlib import colors
 import jax
 from env.point_robot import PointRobot
 # from point_robot import PointRobot
-from jaxrl5.agents import FISOR, CBF
+from jaxrl5.agents import CBF
 
 
 FLAGS = flags.FLAGS
-flags.DEFINE_string('model_location', 'results/PointRobot/ddpm_feasibility_hj_N16_minqc_2025-09-12_s852_486/', 'model location for point robot model')
+flags.DEFINE_string('model_location', 'results/29_reach_PointRobot/', 'model location for point robot model')
 
 
 def to_config_dict(d):

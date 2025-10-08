@@ -3,15 +3,16 @@ import numpy as np
 
 def get_config(config_string):
     base_real_config = dict(
-        project='cbf1',
+        project='cbf2',
         seed=-1,
-        # seed=np.random.randint(1000),
         max_steps=100_000,
         eval_episodes=20,
         batch_size=512, #Actor batch size x 2 (so really 1024), critic is fixed to 256
         log_interval=1000,
         eval_interval=25000,
         normalize_returns=True,
+        cost_limit=10,
+        env_max_steps=1000
     )
 
     if base_real_config["seed"] == -1:
@@ -19,91 +20,32 @@ def get_config(config_string):
 
     base_data_config = dict(
         cost_scale=25,
-        pr_data='data/point_robot-expert-random-100k.hdf5', # The location of point_robot data
+        pr_data='jaxrl5/data/point_robot-expert-random-100k.hdf5', # The location of point_robot data
     )
 
     possible_structures = {
-        "fisor": ConfigDict(
-            dict(
-                agent_kwargs=dict(
-                    model_cls="FISOR",
-                    cost_limit=10,
-                    actor_lr=3e-4,
-                    critic_lr=3e-4,
-                    value_lr=3e-4,
-                    cost_temperature=5,
-                    reward_temperature=3,
-                    T=5,
-                    N=16,
-                    M=0,
-                    clip_sampler=True,
-                    actor_dropout_rate=0.1,
-                    actor_num_blocks=3,
-                    actor_weight_decay=None,
-                    decay_steps=int(3e6),
-                    actor_layer_norm=True,
-                    value_layer_norm=False,
-                    actor_tau=0.001,
-                    actor_architecture='ln_resnet',
-                    critic_objective='expectile',
-                    critic_hyperparam = 0.9,
-                    cost_critic_hyperparam = 0.9,
-                    critic_type="hj", #[hj, qc]
-                    cost_ub=150,
-                    beta_schedule='vp',
-                    actor_objective="feasibility", 
-                    sampling_method="ddpm", 
-                    extract_method="minqc", 
-                ),
-                dataset_kwargs=dict(
-                    **base_data_config,
-                ),
-                **base_real_config,
-            )
-        ),
         "gdcbf": ConfigDict(
             dict(
                 agent_kwargs=dict(
                     model_cls="CBF",
-                    # --- add to config ---
-                    cbf_gamma = 0.99,
-                    cbf_expectile_tau = 0.3,
-                    cbf_admissibility_coef = 1e-3,
-                    # safe_reward_mode = "piecewise",   # or "penalty"
-                    unsafe_penalty_alpha = 1.0,
-                    r_min = -0.1,
-                    mask_unsafe_for_actor = False,
-
-
-                    cost_limit=10,
+                    mode_type='fisor', #['bc', 'fisor', 'diffusion']
+                    cbf_expectile_tau=0.3,
+                    r_min=-0.5,
+                    R=0.5,
                     actor_lr=3e-4,
                     critic_lr=3e-4,
                     value_lr=3e-4,
-                    cost_temperature=5,
+                    cbf_lr=1e-4,
                     reward_temperature=3,
                     T=5,
-                    N=16, # samples per observation
-                    M=0,# how many times the last step of the diffusion sampling process should be repeated
-                    clip_sampler=True,
-                    actor_dropout_rate=0.1,
-                    actor_num_blocks=3,
                     actor_weight_decay=None,
                     decay_steps=int(3e6),
-                    actor_layer_norm=True,
                     value_layer_norm=False,
-                    actor_tau=0.001,
                     actor_architecture='gaussian',#[gaussian, ln_resnet,mlp]
-                    critic_objective='expectile',
-                    critic_hyperparam = 0.7,
-                    cost_critic_hyperparam = 0.7,
+                    critic_hyperparam=0.7,
                     critic_type="qc", #[hj, qc] #qc = Q-critic, which is standard in reinforcement learning for estimating action values.
-                    cost_ub=150,
-                    beta_schedule='vp',#[cosine, linear, vp]
-                    actor_objective="feasibility",#[bc,feasibility] 
-                    sampling_method="dpm_solver-1", #[dpmm_solver-1,  ddpm]
-                    extract_method="minqc",#[minqc, maxq]
-                    max_weight = 100.0,
-                    qh_penalty_scale = 1.0
+                    beta_schedule='vp',#[cosine, linear, vp] 
+                    qh_penalty_scale=1.0,
                 ),
                 dataset_kwargs=dict(
                     **base_data_config,
