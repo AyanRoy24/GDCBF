@@ -21,10 +21,11 @@ results/
 data/
 assets/
 reference/
-
+sweep/
 # files
 *.txt
 *.png
 *.pdf
 *.sh
 *.md
+sweep/
