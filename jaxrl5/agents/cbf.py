@@ -14,9 +14,8 @@ from flax import struct
 import numpy as np
 from jaxrl5.agents.agent import Agent
 from jaxrl5.data.dataset import DatasetDict
-from jaxrl5.networks import GaussianPolicy, get_weight_decay_mask, vp_beta_schedule
-from jaxrl5.networks import MLP, Ensemble, StateActionValue, StateValue, Relu_StateActionValue, Relu_StateValue, DDPM, FourierFeatures, cosine_beta_schedule, ddpm_sampler, MLPResNet
-from jaxrl5.networks.diffusion import dpm_solver_sampler_1st, vp_sde_schedule
+from jaxrl5.networks import GaussianPolicy, get_weight_decay_mask
+from jaxrl5.networks import MLP, Ensemble, StateActionValue, StateValue
 
 def expectile_loss(diff, expectile=0.8):
     weight = jnp.where(diff > 0, expectile, (1 - expectile))
@@ -38,12 +37,7 @@ class CBF(Agent):
     actor_tau: float
     cost_critic_hyperparam: float
     critic_objective: str = struct.field(pytree_node=False)
-    # actor_objective: str = struct.field(pytree_node=False)
-    sampling_method: str = struct.field(pytree_node=False)
-    T: int = struct.field(pytree_node=False)
-    M: int = struct.field(pytree_node=False) #How many repeat last steps
     clip_sampler: bool = struct.field(pytree_node=False)
-    ddpm_temperature: float
     cost_temperature: float
     cost_ub: float
     betas: jnp.ndarray
@@ -108,20 +102,10 @@ class CBF(Agent):
         cost_limit: float = 10.,
         env_max_steps: int = 1000,
         cost_critic_hyperparam: float = 0.8,
-        ddpm_temperature: float = 1.0,
-        actor_num_blocks: int = 2,
         actor_tau: float = 0.001,
-        actor_dropout_rate: Optional[float] = None,
-        actor_layer_norm: bool = False,
         cost_temperature: float = 3.0,
-        T: int = 5,
-        time_dim: int = 64,
-        M: int = 0,
         clip_sampler: bool = True,
-        # actor_objective: str = 'bc',
         critic_objective: str = 'expectile',
-        sampling_method: str = 'ddpm',
-        beta_schedule: str = 'vp',
         cost_ub: float = 200.,
     ):
         rng = jax.random.PRNGKey(seed)
@@ -214,16 +198,6 @@ class CBF(Agent):
             params=safe_value_params,
             tx=optax.GradientTransformation(lambda _: None, lambda _: None),
         )
-        if beta_schedule == 'cosine':
-            betas = jnp.array(cosine_beta_schedule(T))
-        elif beta_schedule == 'linear':
-            betas = jnp.linspace(1e-4, 2e-2, T)
-        elif beta_schedule == 'vp':
-            betas = jnp.array(vp_beta_schedule(T))
-        else:
-            raise ValueError(f'Invalid beta schedule: {beta_schedule}')
-        alphas = 1 - betas
-        alpha_hat = jnp.array([jnp.prod(alphas[:i + 1]) for i in range(T)])
 
         return cls(
             actor=None, # Base class attribute
@@ -256,66 +230,11 @@ class CBF(Agent):
             actor_tau=actor_tau,
             cost_critic_hyperparam=cost_critic_hyperparam,
             critic_objective=critic_objective,
-            # actor_objective=actor_objective,
-            sampling_method=sampling_method,
-            T=T,
-            M=M,
             clip_sampler=clip_sampler,
-            ddpm_temperature=ddpm_temperature,
             cost_temperature=cost_temperature,
             cost_ub=cost_ub,
-            betas=betas,
-            alphas=alphas,
-            alpha_hats=alpha_hat,
         )
 
-    def update_cbf_old(self, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
-        def cbf_loss_fn(params, batch):
-            h_s = batch["costs"]
-            next_v = self.safe_target_value.apply_fn(
-                {"params": self.safe_target_value.params},
-                batch["next_observations"]
-            )
-            if self.mode == 1:
-                target_qh = (1 - self.discount) * h_s + self.discount * jnp.minimum(h_s, next_v)
-            elif self.mode == 2:
-                target_qh = h_s + self.discount * next_v - (1 - self.discount) * self.R
-            elif self.mode == 3:
-                target_qh = jnp.minimum(h_s, next_v)
-            else:
-                raise ValueError(f"Unknown CBF mode: {self.mode}")
-            qh_pred = self.safe_critic.apply_fn(
-                {"params": params["safe_critic"]},
-                batch["observations"], batch["actions"]
-            )
-            qh_loss = ((qh_pred - target_qh) ** 2).mean()
-            vh_pred = self.safe_value.apply_fn(
-                {"params": params["safe_value"]}, batch["observations"]
-            )
-            min_qh = jnp.min(qh_pred, axis=0)
-            vh_loss = expectile_loss(min_qh - vh_pred, self.cbf_expectile_tau).mean()
-            cbf_loss = qh_loss + vh_loss
-            return cbf_loss, {"cbf_loss": cbf_loss}
-        params = {
-            "safe_critic": self.safe_critic.params,
-            "safe_value": self.safe_value.params,
-        }
-        grads, info = jax.grad(cbf_loss_fn, has_aux=True)(params, batch)
-        safe_critic = self.safe_critic.apply_gradients(grads=grads["safe_critic"])
-        safe_value = self.safe_value.apply_gradients(grads=grads["safe_value"])
-        safe_target_critic_params = optax.incremental_update(
-            safe_critic.params, self.safe_target_critic.params, self.tau
-        )
-        safe_target_value_params = optax.incremental_update(
-            safe_value.params, self.safe_target_value.params, self.tau
-        )
-        return self.replace(
-            safe_critic=safe_critic,
-            safe_target_critic=self.safe_target_critic.replace(params=safe_target_critic_params),
-            safe_value=safe_value,
-            safe_target_value=self.safe_target_value.replace(params=safe_target_value_params),
-        ), info  
-    
     def update_cbf(self, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
         def cbf_loss_fn(params, batch):
             h_s = batch["costs"]
@@ -478,108 +397,6 @@ class CBF(Agent):
             target_value=self.target_value.replace(params=target_value_params)
         ), info
 
-    def update_actor_fisor(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
-        rng = agent.rng
-        key, rng = jax.random.split(rng, 2)        
-        # reward adv
-        qs = agent.target_critic.apply_fn(
-            {"params": agent.target_critic.params},
-            batch["observations"],
-            batch["actions"],
-        )
-        q = qs.min(axis=0)
-        v = agent.value.apply_fn(
-            {"params": agent.value.params}, batch["observations"]
-        )
-        # cost reward
-        qcs = agent.safe_target_critic.apply_fn(
-            {"params": agent.safe_target_critic.params},
-            batch["observations"],
-            batch["actions"],
-        )
-        qc = qcs.max(axis=0)
-        vc = agent.safe_value.apply_fn(
-                {"params": agent.safe_value.params}, batch["observations"]
-            )
-        if agent.critic_type == "qc":
-            qc = qc - agent.qc_thres
-            vc = vc - agent.qc_thres
-        if agent.actor_objective == "feasibility":
-            eps = 0. if agent.critic_type != 'qc' else 0.
-            
-            unsafe_condition = jnp.where( vc >  0. - eps, 1, 0)
-            safe_condition = jnp.where(vc <= 0. - eps, 1, 0) * jnp.where(qc<=0. - eps, 1, 0)
-            
-            cost_exp_adv = jnp.exp((vc-qc) * agent.cost_temperature)
-            reward_exp_adv = jnp.exp((q - v) * agent.reward_temperature)
-            
-            unsafe_weights = unsafe_condition * jnp.clip(cost_exp_adv, 0, agent.cost_ub) ## ignore vc >0, qc>vc
-            safe_weights = safe_condition * jnp.clip(reward_exp_adv, 0, 100)
-            
-            weights = unsafe_weights + safe_weights
-        elif agent.actor_objective == "bc":
-            weights = jnp.ones(qc.shape)
-        else:
-            raise ValueError(f'Invalid actor objective: {agent.actor_objective}')
-        time = jax.random.randint(key, (batch['actions'].shape[0], ), 0, agent.T)
-        key, rng = jax.random.split(rng, 2)
-        noise_sample = jax.random.normal(key, (batch['actions'].shape[0], agent.act_dim))
-        
-        alpha_hats = agent.alpha_hats[time]
-        time = jnp.expand_dims(time, axis=1)
-        alpha_1 = jnp.expand_dims(jnp.sqrt(alpha_hats), axis=1)
-        alpha_2 = jnp.expand_dims(jnp.sqrt(1 - alpha_hats), axis=1)
-        noisy_actions = alpha_1 * batch['actions'] + alpha_2 * noise_sample
-        def actor_loss_fn(
-                score_model_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
-            eps_pred = agent.score_model.apply_fn({'params': score_model_params},
-                                       batch['observations'],
-                                       noisy_actions,
-                                       time,
-                                       rngs={'dropout': key},
-                                       training=True)
-            
-            actor_loss = (((eps_pred - noise_sample) ** 2).sum(axis = -1) * weights).mean()
-            
-            return actor_loss, {'actor_loss': actor_loss, 'weights' : weights.mean()}
-            
-        grads, info = jax.grad(actor_loss_fn, has_aux=True)(agent.score_model.params)
-        score_model = agent.score_model.apply_gradients(grads=grads)
-
-        agent = agent.replace(score_model=score_model)
-
-        target_score_params = optax.incremental_update(
-            score_model.params, agent.target_score_model.params, agent.actor_tau
-        )
-
-        target_score_model = agent.target_score_model.replace(params=target_score_params)
-
-        new_agent = agent.replace(score_model=score_model, target_score_model=target_score_model, rng=rng)
-
-        return new_agent, info
-
-    def update_actor_awr(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
-        qs = agent.target_critic.apply_fn(
-            {"params": agent.target_critic.params},
-            batch["observations"],
-            batch["actions"],
-        )
-        q = qs.min(axis=0)
-        v = agent.value.apply_fn(
-            {"params": agent.value.params}, batch["observations"]
-        )
-        def actor_loss_fn(actor_params: FrozenDict[str, Any]):
-            dist = agent.score_model.apply_fn(
-                {"params": actor_params}, batch["observations"]
-            )
-            log_probs = dist.log_prob(batch['actions'])
-            weights = jnp.exp((q - v) * agent.reward_temperature)
-            weights = jnp.clip(weights, 0, 100)
-            return -(log_probs * weights).mean(), {"weights": weights.mean(), "log_probs": log_probs.mean()}
-        grads, info = jax.grad(actor_loss_fn, has_aux=True)(agent.score_model.params)
-        score_model = agent.score_model.apply_gradients(grads=grads)
-        agent = agent.replace(score_model=score_model)
-        return agent, info
     
     def update_actor(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
         rng = agent.rng
@@ -618,9 +435,13 @@ class CBF(Agent):
         unsafe_condition = jnp.where(vc > 0. - eps, 1, 0)
         safe_condition = jnp.where(vc <= 0. - eps, 1, 0) * jnp.where(qc <= 0. - eps, 1, 0)
         
-        cost_exp_adv = jnp.exp((vc - qc) * agent.cost_temperature)
-        reward_exp_adv = jnp.exp(reward_advantage * agent.reward_temperature)
-        
+        max_exp = 50.0  # To prevent overflow in exp        
+        # cost_exp_adv = jnp.exp((vc - qc) * agent.cost_temperature)
+        cost_exp_arg = jnp.clip((qc - vc) * agent.cost_temperature, -max_exp, max_exp)
+        reward_exp_arg = jnp.clip(reward_advantage * agent.reward_temperature, -max_exp, max_exp)
+        cost_exp_adv = jnp.exp(cost_exp_arg)
+        reward_exp_adv = jnp.exp(reward_exp_arg)
+
         unsafe_weights = unsafe_condition * jnp.clip(cost_exp_adv, 0, agent.cost_ub)
         safe_weights = safe_condition * jnp.clip(reward_exp_adv, 0, 100)
         
@@ -697,40 +518,6 @@ class CBF(Agent):
         new_rng = rng
         return np.array(action.squeeze()), self.replace(rng=new_rng)
 
-    # @jax.jit
-    def update_old(self, batch: DatasetDict):
-        new_agent = self
-        batch_size = int(batch['observations'].shape[0]/2)
-
-        def first_half(x):
-            return x[:batch_size]
-        
-        def second_half(x):
-            return x[batch_size:]
-        
-        first_batch = jax.tree_util.tree_map(first_half, batch)
-        second_batch = jax.tree_util.tree_map(second_half, batch)
-
-        new_agent, _ = new_agent.update_actor(first_batch)
-        new_agent, actor_info = new_agent.update_actor(second_batch)
-
-        def slice(x):
-            return x[:256]
-        
-        mini_batch = jax.tree_util.tree_map(slice, batch)
-        new_agent, critic_info = new_agent.update_v(mini_batch)
-        new_agent, value_info = new_agent.update_q(mini_batch)
-        new_agent, safe_critic_info = new_agent.update_vc(mini_batch)
-        new_agent, safe_value_info = new_agent.update_qc(mini_batch)
-
-        return new_agent, {**actor_info, **critic_info, **value_info, **safe_critic_info, **safe_value_info}
-    def update_new(self, batch: DatasetDict):
-        new_agent = self    
-        new_agent, actor_info = new_agent.update_actor_awr(batch)
-        new_agent, cbf_info = new_agent.update_cbf(batch)
-        new_agent, reward_info = new_agent.update_reward(batch)
-        new_agent, value_info = new_agent.update_value(batch)
-        return new_agent, {**value_info, **cbf_info, **reward_info}      
     
     @jax.jit
     def update(self, batch: DatasetDict):

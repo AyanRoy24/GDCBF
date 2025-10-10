@@ -29,17 +29,17 @@ def get_config(config_string):
                 agent_kwargs=dict(
                     model_cls="CBF",
                     mode_type='fisor', #['bc', 'fisor', 'diffusion']
-                    cbf_expectile_tau=0.7,
-                    r_min=-0.5,
+                    cbf_expectile_tau=0.9,
+                    r_min=-0.01,
                     R=0.5,
-                    gamma=0.99,  # Use same as discount for consistency (not 0.5)
-                    actor_lr=1e-4,
+                    gamma=0.99, 
+                    actor_lr=3e-4,
                     critic_lr=3e-4,
                     value_lr=3e-4,
-                    cbf_lr=3e-3,
+                    cbf_lr=3e-4,
                     reward_temperature=3.0,
-                    N=16,
-                    actor_weight_decay=1e-4,
+                    N=64,
+                    actor_weight_decay=None,
                     decay_steps=int(3e6),
                     value_layer_norm=False,
                     actor_architecture='gaussian',#[gaussian, ln_resnet,mlp]
@@ -48,9 +48,7 @@ def get_config(config_string):
                     extract_method='minqc',
                     qh_penalty_scale=1.0,
                     cost_limit=10,
-                    cost_temperature=3.0,
-                    T=5,
-                    M=0,
+                    cost_temperature=5.0,
                     clip_sampler=True,
                     actor_dropout_rate=0.1,
                     actor_num_blocks=3,
@@ -58,10 +56,7 @@ def get_config(config_string):
                     actor_tau=0.001,
                     critic_objective='expectile',
                     cost_critic_hyperparam = 0.9,
-                    cost_ub=100,
-                    beta_schedule='linear', #['linear', 'cosine', 'vp']
-                    # actor_objective="feasibility", 
-                    sampling_method="ddpm", 
+                    cost_ub=150,
                 ),
                 dataset_kwargs=dict(
                     **base_data_config,
