@@ -3,7 +3,7 @@ import numpy as np
 
 def get_config(config_string):
     base_real_config = dict(
-        project='cbf2',
+        project='cbf3',
         seed=-1,
         max_steps=100001,
         eval_episodes=20,
@@ -11,8 +11,6 @@ def get_config(config_string):
         log_interval=1000,
         eval_interval=25000,
         normalize_returns=True,
-        cost_limit=10,
-        env_max_steps=1000
     )
 
     if base_real_config["seed"] == -1:
@@ -24,39 +22,95 @@ def get_config(config_string):
     )
 
     possible_structures = {
-        "gdcbf": ConfigDict(
+        "r": ConfigDict(
             dict(
                 agent_kwargs=dict(
                     model_cls="CBF",
-                    mode_type='fisor', #['bc', 'fisor', 'diffusion']
-                    cbf_expectile_tau=0.9,
-                    r_min=-0.01,
-                    R=0.5,
-                    gamma=0.99, 
+                    mode=1,  # FISOR
+                    reward_temperature=3.0,
+                    cost_temperature=2.0,
+                    critic_hyperparam=0.95,
+                    cost_critic_hyperparameter=0.85,
+                    qh_penalty_scale=0.5,
+                    r_min=-0.001,
+                    R=0.6,
+                    N=128,
+                    gamma=0.995,
                     actor_lr=3e-4,
                     critic_lr=3e-4,
                     value_lr=3e-4,
                     cbf_lr=3e-4,
-                    reward_temperature=3.0,
-                    N=64,
-                    actor_weight_decay=None,
+                    actor_tau=0.001,
+                    cost_ub=300,
+                    actor_weight_decay=1e-6,
                     decay_steps=int(3e6),
                     value_layer_norm=False,
-                    actor_architecture='gaussian',#[gaussian, ln_resnet,mlp]
-                    critic_hyperparam=0.9,
-                    critic_type="qc",
-                    extract_method='minqc',
-                    qh_penalty_scale=1.0,
                     cost_limit=10,
+                    extract_method='minqc',
+                ),
+                dataset_kwargs=dict(
+                    **base_data_config,
+                ),
+                **base_real_config,
+            )
+        ),
+        "c": ConfigDict(
+            dict(
+                agent_kwargs=dict(
+                    model_cls="CBF",
+                    mode=1,  # FISOR
+                    reward_temperature=1.0,
+                    cost_temperature=8.0,
+                    critic_hyperparam=0.85,
+                    cost_critic_hyperparameter=0.92,
+                    qh_penalty_scale=2.0,
+                    r_min=-0.01,
+                    R=0.3,
+                    N=64,
+                    gamma=0.98,
+                    actor_lr=1e-4,
+                    critic_lr=3e-4,
+                    value_lr=3e-4,
+                    cbf_lr=5e-4,
+                    actor_tau=0.0005,
+                    cost_ub=100,
+                    actor_weight_decay=1e-5,
+                    decay_steps=int(3e6),
+                    value_layer_norm=True,
+                    cost_limit=5,
+                    extract_method='minqc',
+                ),
+                dataset_kwargs=dict(
+                    **base_data_config,
+                ),
+                **base_real_config,
+            )
+        ),
+        "b": ConfigDict(
+            dict(
+                agent_kwargs=dict(
+                    model_cls="CBF",
+                    mode=1,  # FISOR
+                    reward_temperature=2.0,
                     cost_temperature=5.0,
-                    clip_sampler=True,
-                    actor_dropout_rate=0.1,
-                    actor_num_blocks=3,
-                    actor_layer_norm=True,
+                    critic_hyperparam=0.9,
+                    cost_critic_hyperparameter=0.9,
+                    qh_penalty_scale=1.0,
+                    r_min=-0.005,
+                    R=0.5,
+                    N=64,
+                    gamma=0.99,
+                    actor_lr=1e-4,
+                    critic_lr=3e-4,
+                    value_lr=3e-4,
+                    cbf_lr=5e-4,
                     actor_tau=0.001,
-                    critic_objective='expectile',
-                    cost_critic_hyperparam = 0.9,
                     cost_ub=150,
+                    actor_weight_decay=1e-6,
+                    decay_steps=int(3e6),
+                    value_layer_norm=False,
+                    cost_limit=10,
+                    extract_method='minqc',
                 ),
                 dataset_kwargs=dict(
                     **base_data_config,

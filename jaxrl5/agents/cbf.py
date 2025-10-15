@@ -1,3 +1,4 @@
+import distrax
 import os
 from functools import partial
 from typing import Dict, Optional, Sequence, Tuple, Union, Any
@@ -20,6 +21,9 @@ from jaxrl5.networks import MLP, Ensemble, StateActionValue, StateValue
 def expectile_loss(diff, expectile=0.8):
     weight = jnp.where(diff > 0, expectile, (1 - expectile))
     return weight * (diff**2)
+def safe_expectile_loss(diff, expectile=0.8):
+    weight = jnp.where(diff < 0, expectile, (1 - expectile))
+    return weight * (diff**2)
 
 @partial(jax.jit, static_argnames=('critic_fn'))
 def compute_q(critic_fn, critic_params, observations, actions):
@@ -33,17 +37,8 @@ def compute_safe_q(safe_critic_fn, safe_critic_params, observations, actions):
     return safe_q_values
 
 class CBF(Agent):
-    target_score_model: TrainState
-    actor_tau: float
-    cost_critic_hyperparam: float
-    critic_objective: str = struct.field(pytree_node=False)
-    clip_sampler: bool = struct.field(pytree_node=False)
-    cost_temperature: float
-    cost_ub: float
-    betas: jnp.ndarray
-    alphas: jnp.ndarray
-    alpha_hats: jnp.ndarray
     score_model: TrainState
+    target_score_model: TrainState
     critic: TrainState
     target_critic: TrainState
     value: TrainState
@@ -55,18 +50,20 @@ class CBF(Agent):
     discount: float
     gamma: float
     tau: float
+    actor_tau: float
     critic_hyperparam: float
-    critic_type: str = struct.field(pytree_node=False)
+    cost_critic_hyperparameter: float     
     extract_method: str = struct.field(pytree_node=False)
     action_dim: int = struct.field(pytree_node=False)
     N: int #How many samples per observation
     R: float = struct.field(pytree_node=False)  # for 'add' mode
+    cost_temperature: float
     reward_temperature: float
-    cbf_expectile_tau: float 
+    qc_thres: float
+    cost_ub: float
     r_min: float 
     qh_penalty_scale: float
-    mode:int = struct.field(pytree_node=False) # 1: 'fisor', 2: 'add', 3: 'reach'
-    qc_thres: float
+    mode:int = struct.field(pytree_node=False)  # 1: 'fisor', 2: 'add', 3: 'reach'
 
     @classmethod
     def create(
@@ -74,8 +71,6 @@ class CBF(Agent):
         seed: int,
         observation_space: gym.spaces.Space,
         action_space: gym.spaces.Box,
-        actor_architecture: str = 'mlp',
-        mode_type: str = 'fisor', #['bc', 'fisor', 'diffusion']
         actor_lr: Union[float, optax.Schedule] = 3e-4,
         critic_lr: float = 3e-4,
         value_lr: float = 3e-4,
@@ -92,21 +87,17 @@ class CBF(Agent):
         reward_temperature: float = 3.0,
         N: int = 64,
         R: float = 0.5,  # for 'add' mode
-        critic_type: str = 'qc',
-        extract_method: bool = False,
         decay_steps: Optional[int] = int(2e6),
-        cbf_expectile_tau: float = 0.2,
+        cost_critic_hyperparameter: float = 0.2,
         r_min: float = -1.0,
         qh_penalty_scale: float = 1.0,
-        mode: int = 1,
+        mode: int = 1,  # 1: 'fisor', 2: 'add', 3: 'reach'
         cost_limit: float = 10.,
         env_max_steps: int = 1000,
-        cost_critic_hyperparam: float = 0.8,
         actor_tau: float = 0.001,
         cost_temperature: float = 3.0,
-        clip_sampler: bool = True,
-        critic_objective: str = 'expectile',
         cost_ub: float = 200.,
+        extract_method: str = 'maxq', # 'maxq' or 'minqc'
     ):
         rng = jax.random.PRNGKey(seed)
         rng, actor_key, critic_key, value_key, safe_critic_key, safe_value_key = jax.random.split(rng, 6)
@@ -122,12 +113,12 @@ class CBF(Agent):
         time = jnp.zeros((1, 1))
         observations = jnp.expand_dims(observations, axis = 0)
         actions = jnp.expand_dims(actions, axis = 0)
-        if actor_architecture == 'gaussian':
-            actor_params = actor_def.init(actor_key, observations,
+        # if actor_architecture == 'gaussian':
+        actor_params = actor_def.init(actor_key, observations,
                                             time)['params']
-        else:
-            actor_params = actor_def.init(actor_key, observations, actions,
-                                        time)['params']        
+        # else:
+        #     actor_params = actor_def.init(actor_key, observations, actions,
+        #                                 time)['params']        
         actor_params = FrozenDict(actor_params) 
         score_model = TrainState.create(apply_fn=actor_def.apply,
                                         params=actor_params,
@@ -153,15 +144,9 @@ class CBF(Agent):
             params=critic_params,
             tx=optax.GradientTransformation(lambda _: None, lambda _: None),
         )
-        if mode_type == 'fisor':
-            mode = 1
-        elif mode_type == 'add':
-            mode = 2
-        elif mode_type == 'reach':
-            mode = 3
-        if critic_type == 'qc':
-            critic_cls = partial(StateActionValue, base_cls=critic_base_cls)
-            critic_def = Ensemble(critic_cls, num=num_qs)
+        # if critic_type == 'qc':
+        critic_cls = partial(StateActionValue, base_cls=critic_base_cls)
+        critic_def = Ensemble(critic_cls, num=num_qs)
         safe_critic_params = critic_def.init(safe_critic_key, observations, actions)["params"]
         safe_critic_params = FrozenDict(safe_critic_params)
         safe_critic_optimiser = optax.adam(learning_rate=cbf_lr)
@@ -186,8 +171,8 @@ class CBF(Agent):
             params=value_params,
             tx=optax.GradientTransformation(lambda _: None, lambda _: None),
         )
-        if critic_type == 'qc':
-            value_def = StateValue(base_cls=value_base_cls)            
+        # if critic_type == 'qc':
+        value_def = StateValue(base_cls=value_base_cls)            
         safe_value_params = value_def.init(safe_value_key, observations)["params"]
         safe_value_params = FrozenDict(safe_value_params)
         safe_value = TrainState.create(apply_fn=value_def.apply,
@@ -219,266 +204,208 @@ class CBF(Agent):
             R=R,
             critic_hyperparam=critic_hyperparam,
             reward_temperature=reward_temperature,
-            cbf_expectile_tau=cbf_expectile_tau,
+            cost_critic_hyperparameter=cost_critic_hyperparameter,
             r_min=r_min,
             qh_penalty_scale=qh_penalty_scale,
             mode=mode,
-            critic_type=critic_type,
-            extract_method=extract_method,
             qc_thres=qc_thres,
             target_score_model=target_score_model,
             actor_tau=actor_tau,
-            cost_critic_hyperparam=cost_critic_hyperparam,
-            critic_objective=critic_objective,
-            clip_sampler=clip_sampler,
             cost_temperature=cost_temperature,
             cost_ub=cost_ub,
+            extract_method=extract_method
         )
 
-    def update_cbf(self, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
-        def cbf_loss_fn(params, batch):
-            h_s = batch["costs"]
-            next_v = self.safe_target_value.apply_fn(
-                {"params": self.safe_target_value.params},
-                batch["next_observations"]
-            )
-            
-            # Get current Q and V predictions
-            qh_pred = self.safe_critic.apply_fn(
-                {"params": params["safe_critic"]},
-                batch["observations"], batch["actions"]
-            )
-            vh_pred = self.safe_value.apply_fn(
-                {"params": params["safe_value"]}, batch["observations"]
-            )
-            
-            # Special case handling based on formulation
-            if self.mode == 1:  # FISOR
-                # Φ_FISOR(x,y) = (1-γ)x + γ min{x,y}
-                # α_FISOR(x) = γx
-                target_qh = (1 - self.gamma) * h_s + self.gamma * jnp.minimum(h_s, next_v)
-                alpha_regularizer = self.gamma * h_s
-                
-            elif self.mode == 2:  # Value-as-Barrier (Additive Bellman)
-                # Φ_add(x,y) = x + γy - (1-γ)R
-                # α_add(x) = 0
-                target_qh = h_s + self.gamma * next_v - (1 - self.gamma) * self.R
-                alpha_regularizer = jnp.zeros_like(h_s)
-                
-            elif self.mode == 3:  # Reachability Constrained RL
-                # Φ_reach(x,y) = min{x,y}
-                # α_reach(x) = x
-                target_qh = jnp.minimum(h_s, next_v)
-                alpha_regularizer = h_s
-                
-            else:
-                raise ValueError(f"Unknown CBF mode: {self.mode}")
-            
-            # Q-function loss with gradient clipping for stability
-            qh_loss = ((qh_pred - jax.lax.stop_gradient(target_qh)) ** 2).mean()
-            
-            # Value function loss using expectile regression
-            min_qh = jnp.min(qh_pred, axis=0)
-            vh_diff = min_qh - vh_pred
-            vh_loss = expectile_loss(vh_diff, self.cbf_expectile_tau).mean()
-            
-            # Add regularization term to prevent sudden convergence
-            regularization_loss = 0.001 * (alpha_regularizer ** 2).mean()
-            
-            # Smooth loss combination with adaptive weighting
-            total_qh_loss = jnp.mean(qh_pred ** 2)
-            total_vh_loss = jnp.mean(vh_pred ** 2)
-            
-            # Adaptive loss weighting to balance Q and V learning
-            qh_weight = 1.0 / (1.0 + jnp.exp(-total_qh_loss))
-            vh_weight = 1.0 / (1.0 + jnp.exp(-total_vh_loss))
-            
-            # Normalize weights
-            total_weight = qh_weight + vh_weight
-            qh_weight = qh_weight / total_weight
-            vh_weight = vh_weight / total_weight
-            
-            # Combined loss with smoothing
-            cbf_loss = qh_weight * qh_loss + vh_weight * vh_loss + regularization_loss
-            
-            # Fixed gradient penalty calculation
-            # Use L2 norm of parameters instead of gradient of outputs
-            qh_param_penalty = 0.001 * jnp.mean(jnp.square(qh_pred))
-            vh_param_penalty = 0.001 * jnp.mean(jnp.square(vh_pred))
-            
-            total_loss = cbf_loss + qh_param_penalty + vh_param_penalty
-            
-            return total_loss, {
-                "cbf_loss": total_loss,
-                #"qh_loss": qh_loss,"vh_loss": vh_loss,"regularization_loss": regularization_loss,"qh_weight": qh_weight,"vh_weight": vh_weight,"target_qh_mean": target_qh.mean(),"qh_pred_mean": qh_pred.mean(),"vh_pred_mean": vh_pred.mean(),
-            }
-        
-        params = {
-            "safe_critic": self.safe_critic.params,
-            "safe_value": self.safe_value.params,
-        }
-        
-        grads, info = jax.grad(cbf_loss_fn, has_aux=True)(params, batch)
-        
-        # Clip gradients to prevent sudden convergence
-        max_grad_norm = 1.0
-        grads["safe_critic"] = optax.clip_by_global_norm(max_grad_norm).update(grads["safe_critic"], None)[0]
-        grads["safe_value"] = optax.clip_by_global_norm(max_grad_norm).update(grads["safe_value"], None)[0]
-        
-        safe_critic = self.safe_critic.apply_gradients(grads=grads["safe_critic"])
-        safe_value = self.safe_value.apply_gradients(grads=grads["safe_value"])
-        
-        safe_target_critic_params = optax.incremental_update(
-            safe_critic.params, self.safe_target_critic.params, self.tau
+
+    def update_Vr(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
+        qs = agent.target_critic.apply_fn(
+            {"params": agent.target_critic.params},
+            batch["observations"], batch["actions"]
         )
-        safe_target_value_params = optax.incremental_update(
-            safe_value.params, self.safe_target_value.params, self.tau
+        q = jnp.min(qs, axis=0)
+        def Vr_loss(value_params)-> Tuple[jnp.ndarray, Dict[str, float]]:
+            v = agent.value.apply_fn({"params": value_params}, batch["observations"])
+            loss = expectile_loss(q - v, agent.critic_hyperparam).mean()  # τ → 1
+            return loss, {"v_r_loss": loss, "v_r": v.mean()}
+        grads, info = jax.grad(Vr_loss, has_aux=True)(agent.value.params)
+        value = agent.value.apply_gradients(grads=grads)
+        agent = agent.replace(value=value)
+        return agent, info
+
+
+    def update_Qr(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
+        qh = agent.safe_critic.apply_fn(
+            {"params": agent.safe_critic.params},
+            batch["observations"], batch["actions"]
         )
+        qh_min = jnp.min(qh, axis=0)  # Take min over ensemble
         
-        return self.replace(
-            safe_critic=safe_critic,
-            safe_target_critic=self.safe_target_critic.replace(params=safe_target_critic_params),
-            safe_value=safe_value,
-            safe_target_value=self.safe_target_value.replace(params=safe_target_value_params),
-        ), info
-    
-    def update_reward(self, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
-        def reward_loss_piecewise_fn(critic_params, batch):
-            def reward_piecewise_target(batch):
-                qh = self.safe_critic.apply_fn(
-                    {"params": self.safe_critic.params},
-                    batch["observations"], batch["actions"]
-                )
-                qh_star = jnp.min(qh, axis=0)
-                next_vr = self.value.apply_fn(
-                    {"params": self.value.params}, batch["next_observations"]
-                )
-                mask_safe = (qh_star <= 0)
-                mask_unsafe = (qh_star > 0)
-                target = (
-                    mask_safe * (batch["rewards"] + self.discount * batch["masks"] * next_vr)
-                    + mask_unsafe * (self.r_min / (1 - self.discount) - qh_star * self.qh_penalty_scale)
-                )
-                return target        
-            target_q = reward_piecewise_target(batch)
-            qs = self.critic.apply_fn(
+        next_vr = agent.value.apply_fn(
+            {"params": agent.value.params}, batch["next_observations"]
+        )        
+        safe_mask = (qh_min <= 0)  # Q_h(s,a) ≤ 0
+        unsafe_mask = (qh_min > 0)  # Q_h(s,a) > 0
+        safe_target = batch["rewards"] + agent.discount * batch["masks"] * next_vr
+        unsafe_target = agent.r_min / (1 - agent.discount) - qh_min       
+        target_q = safe_mask * safe_target + unsafe_mask * unsafe_target
+        
+        def Qr_loss(critic_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
+            qs = agent.critic.apply_fn(
                 {"params": critic_params},
                 batch["observations"], batch["actions"]
             )
+            # Equation 3: MSE loss
             loss = ((qs - target_q) ** 2).mean()
             return loss, {"q_r_loss": loss, "q_r": qs.mean()}
-        grads, info = jax.grad(reward_loss_piecewise_fn, has_aux=True)(self.critic.params, batch)
-        critic = self.critic.apply_gradients(grads=grads)
-        target_critic_params = optax.incremental_update(
-            critic.params, self.target_critic.params, self.tau
-        )
-        return self.replace(
-            critic=critic,
-            target_critic=self.target_critic.replace(params=target_critic_params)
-        ), info
 
-    def update_value(self, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
-        def value_loss_fn(value_params, batch):
-            qs = self.target_critic.apply_fn(
-                {"params": self.target_critic.params},
+        grads, info = jax.grad(Qr_loss, has_aux=True)(agent.critic.params)
+        critic = agent.critic.apply_gradients(grads=grads)
+        agent = agent.replace(critic=critic)
+        
+        target_critic_params = optax.incremental_update(
+            critic.params, agent.target_critic.params, agent.tau
+        )
+        target_critic = agent.target_critic.replace(params=target_critic_params)
+        new_agent = agent.replace(critic=critic, target_critic=target_critic)
+        
+        return new_agent, info
+
+
+    def update_Vh(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
+        # Equation 5: V_h(s) = max Q(s,a) ← with expectile regression
+        qcs = agent.safe_target_critic.apply_fn(
+            {"params": agent.safe_target_critic.params},
+            batch["observations"], batch["actions"]
+        )
+        qc = qcs.max(axis=0)  # max over ensemble
+        
+        def Vh_loss(safe_value_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
+            vh = agent.safe_value.apply_fn({"params": safe_value_params}, batch["observations"])
+            # loss = safe_expectile_loss(qc - vh, agent.cost_critic_hyperparameter).mean()
+            loss = expectile_loss(qc - vh, agent.cost_critic_hyperparameter).mean()
+            return loss, {"vh_loss": loss, "v_h": vh.mean()}
+        
+        grads, info = jax.grad(Vh_loss, has_aux=True)(agent.safe_value.params)
+        safe_value = agent.safe_value.apply_gradients(grads=grads)
+        agent = agent.replace(safe_value=safe_value)
+        return agent, info
+
+
+    def update_Qh(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:       
+        next_vh = agent.safe_value.apply_fn(
+            {"params": agent.safe_value.params}, batch["next_observations"]
+        )        
+        h_sa = batch["costs"]
+        if agent.mode == 1:  # FISOR
+            target_qh = (1 - agent.gamma) * h_sa + agent.gamma * jnp.minimum(h_sa, next_vh)
+        elif agent.mode == 2:  # Value-as-Barrier (Additive Bellman)
+            target_qh = h_sa + agent.gamma * next_vh - (1 - agent.gamma) * agent.R
+        elif agent.mode == 3:  # Reachability Constrained RL
+            target_qh = jnp.minimum(h_sa, next_vh)
+        else:
+            raise ValueError(f"Unknown CBF mode: {agent.mode}")
+        
+        def Qh_loss(safe_critic_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
+            qhs = agent.safe_critic.apply_fn(
+                {"params": safe_critic_params},
                 batch["observations"], batch["actions"]
             )
-            q_min = jnp.min(qs, axis=0)
-            v = self.value.apply_fn({"params": value_params}, batch["observations"])
-            loss = expectile_loss(q_min - v, self.critic_hyperparam).mean()  # τ → 1
-            return loss, {"v_r_loss": loss, "v_r": v.mean()}
-        grads, info = jax.grad(value_loss_fn, has_aux=True)(self.value.params, batch)
-        value = self.value.apply_gradients(grads=grads)
-        target_value_params = optax.incremental_update(
-            value.params, self.target_value.params, self.tau
+            qh_loss = ((qhs - target_qh) ** 2).mean()
+            return qh_loss, {"qh_loss": qh_loss, "q_h": qhs.mean()}
+        
+        grads, info = jax.grad(Qh_loss, has_aux=True)(agent.safe_critic.params)
+        safe_critic = agent.safe_critic.apply_gradients(grads=grads)
+        agent = agent.replace(safe_critic=safe_critic)
+        
+        safe_target_critic_params = optax.incremental_update(
+            safe_critic.params, agent.safe_target_critic.params, agent.tau
         )
-        return self.replace(
-            value=value,
-            target_value=self.target_value.replace(params=target_value_params)
-        ), info
+        safe_target_critic = agent.safe_target_critic.replace(params=safe_target_critic_params)
+        new_agent = agent.replace(safe_critic=safe_critic, safe_target_critic=safe_target_critic)
+        return new_agent, info
 
-    
+
     def update_actor(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
         rng = agent.rng
         key, rng = jax.random.split(rng, 2)
-        
-        # Compute reward advantage
-        qs = agent.target_critic.apply_fn(
-            {"params": agent.target_critic.params},
-            batch["observations"],
-            batch["actions"],
-        )
+        qs = agent.target_critic.apply_fn({"params": agent.target_critic.params}, batch["observations"], batch["actions"])
         q = qs.min(axis=0)
-        v = agent.value.apply_fn(
-            {"params": agent.value.params}, batch["observations"]
-        )
-        reward_advantage = q - v
-        
-        # Compute safety advantage if needed
+        v = agent.value.apply_fn({"params": agent.value.params}, batch["observations"])
         qcs = agent.safe_target_critic.apply_fn(
             {"params": agent.safe_target_critic.params},
-            batch["observations"],
-            batch["actions"],
+            batch["observations"], batch["actions"],
         )
         qc = qcs.max(axis=0)
-        vc = agent.safe_value.apply_fn(
-            {"params": agent.safe_value.params}, batch["observations"]
-        )
+        vc = agent.safe_value.apply_fn({"params": agent.safe_value.params}, batch["observations"])     
+        # qc = qc - agent.qc_thres
+        # vc = vc - agent.qc_thres
         
-        if agent.critic_type == "qc":
-            qc = qc - agent.qc_thres
-            vc = vc - agent.qc_thres
+        # Convert to barrier function: h = -qh (so h > 0 is safe, h < 0 is unsafe)
+        h = -qc
+        vh = -vc
+        # Penalize unsafe states (h < 0) more heavily
+        # Safe states (h >= 0): use reward advantage
+        # Unsafe states (h < 0): use barrier penalty
+        eps = 0.0
+        # Identify safe and unsafe transitions
+        # safe_mask = (h >= eps)  # h >= 0 means safe
+        # unsafe_mask = (h < eps)  # h < 0 means unsafe
         
-        # Determine weights based on safety conditions
-        # if agent.actor_objective == "feasibility":
-        eps = 0.
-        unsafe_condition = jnp.where(vc > 0. - eps, 1, 0)
-        safe_condition = jnp.where(vc <= 0. - eps, 1, 0) * jnp.where(qc <= 0. - eps, 1, 0)
+        # Reward-based weights for safe states
+        reward_adv = q - v
+        reward_weights = jnp.exp(reward_adv * agent.reward_temperature)
+        reward_weights = jnp.clip(reward_weights, 0, 100)
         
-        max_exp = 50.0  # To prevent overflow in exp        
-        # cost_exp_adv = jnp.exp((vc - qc) * agent.cost_temperature)
-        cost_exp_arg = jnp.clip((qc - vc) * agent.cost_temperature, -max_exp, max_exp)
-        reward_exp_arg = jnp.clip(reward_advantage * agent.reward_temperature, -max_exp, max_exp)
-        cost_exp_adv = jnp.exp(cost_exp_arg)
-        reward_exp_adv = jnp.exp(reward_exp_arg)
+        # Barrier-based penalty for unsafe states
+        # Penalize actions with h < 0 (unsafe)
+        # barrier_adv = h - vh  # If h < vh, this action makes things worse
+        # barrier_penalty = jnp.exp(-barrier_adv * agent.cost_temperature)  # Negative sign to penalize h < 0
+        # barrier_penalty = jnp.clip(barrier_penalty, 0, agent.cost_ub)
+        
+        # Use Q_h directly (no negation)
+        safe_mask = (qc <= 0)  # Q_h ≤ 0 means safe
+        unsafe_mask = (qc > 0)  # Q_h > 0 means unsafe
 
-        unsafe_weights = unsafe_condition * jnp.clip(cost_exp_adv, 0, agent.cost_ub)
-        safe_weights = safe_condition * jnp.clip(reward_exp_adv, 0, 100)
+        # Barrier advantage (more unsafe = higher Q_h = worse)
+        barrier_adv = qc - vc  # If qc > vc, this action makes things worse
+        barrier_penalty = jnp.exp(-barrier_adv * agent.cost_temperature)  # Penalize positive Q_h
+        barrier_penalty = jnp.clip(barrier_penalty, 0, agent.cost_ub)
+        # Combine weights: use reward weights for safe states, barrier penalty for unsafe
+        weights = safe_mask * reward_weights + unsafe_mask * barrier_penalty
+
+        # unsafe_condition = jax.nn.sigmoid((vc - eps) * 10.0)  # Smooth transition
+        # safe_condition = jax.nn.sigmoid((-vc - eps) * 10.0) * jax.nn.sigmoid((-qc - eps) * 10.0)        
+        # cost_exp_adv = jnp.exp((qc - vc) * agent.cost_temperature)
+        # reward_exp_adv = jnp.exp((q-v) * agent.reward_temperature)
+
+        # unsafe_condition = jnp.where( vc >  0. - eps, 1, 0)
+        # safe_condition = jnp.where(vc <= 0. - eps, 1, 0) * jnp.where(qc<=0. - eps, 1, 0)
         
-        weights = unsafe_weights + safe_weights
-        # elif agent.actor_objective == "bc":
-        #     weights = jnp.ones(qc.shape)
-        # else:
-        #     # Default AWR weights
-        #     weights = jnp.exp(reward_advantage * agent.reward_temperature)
-        #     weights = jnp.clip(weights, 0, 100)
+        # cost_exp_adv = jnp.exp((vc-qc) * agent.cost_temperature)
+        # reward_exp_adv = jnp.exp((q - v) * agent.reward_temperature)
         
-        # Define actor loss function using AWR
+        # unsafe_weights = unsafe_condition * jnp.clip(cost_exp_adv, 0, agent.cost_ub)
+        # safe_weights = safe_condition * jnp.clip(reward_exp_adv, 0, 100)
+        # weights = unsafe_weights + safe_weights
+
         def actor_loss_fn(actor_params: FrozenDict[str, Any]):
-            dist = agent.score_model.apply_fn(
-                {"params": actor_params}, batch["observations"]
-            )
+            dist = agent.score_model.apply_fn({"params": actor_params}, batch["observations"])
             log_probs = dist.log_prob(batch['actions'])
-            return -(log_probs * weights).mean(), {"weights": weights.mean(), "log_probs": log_probs.mean()}
-        
+            actor_loss = -(log_probs * weights).mean() 
+            return actor_loss, {"weights": weights.mean(), "log_probs": log_probs.mean()}
+                
         grads, info = jax.grad(actor_loss_fn, has_aux=True)(agent.score_model.params)
         score_model = agent.score_model.apply_gradients(grads=grads)
-        
+        agent = agent.replace(score_model=score_model)
         target_score_params = optax.incremental_update(
             score_model.params, agent.target_score_model.params, agent.actor_tau
-        )
-        
+        )        
         target_score_model = agent.target_score_model.replace(params=target_score_params)
-        
-        new_agent = agent.replace(
-            score_model=score_model, 
-            target_score_model=target_score_model, 
-            rng=rng
-        )
-        
+        new_agent = agent.replace(score_model=score_model, target_score_model=target_score_model, rng=rng)
         return new_agent, info
-    
-    def eval_actions(self, observations: jnp.ndarray):
+
+
+    def eval_actions_old(self, observations: jnp.ndarray):
         rng = self.rng
         assert len(observations.shape) == 1
         observations = jax.device_put(observations)
@@ -491,86 +418,429 @@ class CBF(Agent):
             minval=-1.0,  # Assuming normalized action space
             maxval=1.0
         )
-        # Compute reward Q values
         qs = compute_q(self.target_critic.apply_fn, self.target_critic.params, observations_batch, actions)
-        # Compute safety values using the CBF (safety critic)
         qcs = compute_safe_q(self.safe_target_critic.apply_fn, self.safe_target_critic.params, observations_batch, actions)
-        # Apply threshold adjustment if using qc critic type
-        if self.critic_type == "qc":
-            qcs = qcs - self.qc_thres
-        # Select action based on specified extraction method
+        # qcs = qcs - self.qc_thres
         if self.extract_method == 'maxq':
-            # Find action with maximum reward that satisfies safety constraints
-            safe_mask = (qcs >= 0).astype(jnp.float32)
-            # If there are safe actions, choose the one with highest reward
-            if jnp.any(safe_mask):
-                masked_qs = qs * safe_mask - 1e6 * (1 - safe_mask)  # Large penalty for unsafe actions
-                idx = jnp.argmax(masked_qs)
-            else:
-                # If no safe actions, choose the one with least safety violation
-                idx = jnp.argmax(qcs)
+            idx = jnp.argmax(qs)
         elif self.extract_method == 'minqc':
-            # Choose action that maximizes safety (minimizes cost)
-            idx = jnp.argmax(qcs)
+            idx = jnp.argmin(qcs)
         else:
             raise ValueError(f'Invalid extract_method: {self.extract_method}')
         action = actions[idx]
         new_rng = rng
         return np.array(action.squeeze()), self.replace(rng=new_rng)
 
+    def eval_actions(self, observations: jnp.ndarray):
+        rng = self.rng
+        assert len(observations.shape) == 1
+        observations = jax.device_put(observations)
+        observations_batch = jnp.expand_dims(observations, axis=0).repeat(self.N, axis=0)
+        # we sample N action candidates and select the safest one (i.e., the lowest Q*_h value) as the final output
+        
+        # Sample actions from the learned Gaussian policy
+        rng, key = jax.random.split(rng, 2)
+        dist = self.target_score_model.apply_fn(
+            {"params": self.target_score_model.params}, 
+            observations_batch
+        )
+        actions = dist.sample(seed=key)
+        
+        qs = compute_q(self.target_critic.apply_fn, self.target_critic.params, observations_batch, actions)
+        qcs = compute_safe_q(self.safe_target_critic.apply_fn, self.safe_target_critic.params, observations_batch, actions)
+        # Evaluate Safety (Q*_h value) for Each Action using compute_safe_q hich computes the Q*_h value (cost critic value) for each action.
+        # qcs = qcs - self.qc_thres
+        if self.extract_method == 'maxq':
+            idx = jnp.argmax(qs)
+        elif self.extract_method == 'minqc':
+            idx = jnp.argmin(qcs)
+            # Select the Safest Action (Lowest Q*_h)
+        else:
+            raise ValueError(f'Invalid extract_method: {self.extract_method}')
+        
+        action = actions[idx]
+        new_rng = rng
+        return np.array(action.squeeze()), self.replace(rng=new_rng)
+
+    def iql(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
+        """
+        IQL-like objective for cost critic learning as described in Section 3.1
+        V_r*(s) = min max h(s_t) where h(s,a) = -c(s,a)
+        Q_h*(s,a) = min max h(s_t) 
+        """
+        
+        # Step 1: Update cost value function V_r* using IQL-like objective
+        # Collect cost values (h values) for current states
+        h_values = -batch["costs"]  # h(s,a) = -c(s,a)
+        
+        def cost_value_loss(cost_value_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
+            v_cost = agent.safe_value.apply_fn({"params": cost_value_params}, batch["observations"])
+            
+            # IQL-like expectile regression towards max h values
+            # For costs, we want to learn the worst-case (maximum) cost values
+            cost_advantage = h_values - v_cost
+            loss = safe_expectile_loss(cost_advantage, agent.cost_critic_hyperparameter).mean()
+            
+            return loss, {"cost_v_loss": loss, "cost_v": v_cost.mean()}
+        
+        grads, v_info = jax.grad(cost_value_loss, has_aux=True)(agent.safe_value.params)
+        safe_value = agent.safe_value.apply_gradients(grads=grads)
+        
+        # Step 2: Update cost Q-function Q_h* using IQL-like objective  
+        next_v_cost = safe_value.apply_fn({"params": safe_value.params}, batch["next_observations"])
+        
+        # Bellman target for cost Q-function
+        cost_target = h_values + agent.discount * batch["masks"] * next_v_cost
+        
+        def cost_q_loss(cost_critic_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
+            q_costs = agent.safe_critic.apply_fn(
+                {"params": cost_critic_params},
+                batch["observations"], batch["actions"]
+            )
+            
+            # MSE loss for Q-function
+            loss = ((q_costs - cost_target) ** 2).mean()
+            return loss, {"cost_q_loss": loss, "cost_q": q_costs.mean()}
+        
+        grads, q_info = jax.grad(cost_q_loss, has_aux=True)(agent.safe_critic.params)
+        safe_critic = agent.safe_critic.apply_gradients(grads=grads)
+        
+        # Update target networks
+        safe_target_critic_params = optax.incremental_update(
+            safe_critic.params, agent.safe_target_critic.params, agent.tau
+        )
+        safe_target_critic = agent.safe_target_critic.replace(params=safe_target_critic_params)
+        
+        safe_target_value_params = optax.incremental_update(
+            safe_value.params, agent.safe_target_value.params, agent.tau
+        )
+        safe_target_value = agent.safe_target_value.replace(params=safe_target_value_params)
+        
+        new_agent = agent.replace(
+            safe_critic=safe_critic, 
+            safe_target_critic=safe_target_critic,
+            safe_value=safe_value,
+            safe_target_value=safe_target_value
+        )
+        
+        return new_agent, {**v_info, **q_info}
+
+    def cbf_good(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
+        
+        def loss(cost_value_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
+            v_pred = agent.safe_value.apply_fn({"params": cost_value_params}, batch["observations"])
+            
+            h = -batch["costs"]  # h(s,a) = -c(s,a)
+
+            cost_diff = h - v_pred
+            loss = expectile_loss(cost_diff, 0.95).mean()  # High expectile for safety
+
+            return loss, {"loss": loss, "v_h": v_pred.mean()}
+
+        grads, info = jax.grad(loss, has_aux=True)(agent.safe_value.params)
+        safe_value = agent.safe_value.apply_gradients(grads=grads)
+        agent = agent.replace(safe_value=safe_value)
+        
+        return agent, info
+
+    def cbf(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
+        """
+        Special cases for conservative barrier critics with h(s,a) = -cost(s,a).
+
+        Implements:
+        - FISOR          (mode='f'): Φ_f(x,y) = (1-γ) x + γ min{x, y}
+        - Additive Bellman (mode='a'): Φ_a(x,y) = x + γ y - (1-γ) R
+        - Reachability   (mode='r'): Φ_r(x,y) = min{x, y}
+        """
+        # 1) Update V_h(s) via expectile regression towards max_a Q_h(s,a)
+        qcs = agent.safe_target_critic.apply_fn(
+            {"params": agent.safe_target_critic.params},
+            batch["observations"], batch["actions"]
+        )
+        qc_max = qcs.max(axis=0)  # max over ensemble
+
+        def vh_loss_fn(safe_value_params):
+            vh = agent.safe_value.apply_fn({"params": safe_value_params}, batch["observations"])
+            loss = expectile_loss(qc_max - vh, agent.cost_critic_hyperparameter).mean()
+            info = {
+                "loss": loss,
+                "v_h": vh.mean(),
+                # "qc_max_mean": qc_max.mean(),
+            }
+            return loss, info
+
+        vh_grads, vh_info = jax.grad(vh_loss_fn, has_aux=True)(agent.safe_value.params)
+        safe_value = agent.safe_value.apply_gradients(grads=vh_grads)
+
+        # 2) Update Q_h(s,a) with Φ depending on mode
+        next_vh = safe_value.apply_fn({"params": safe_value.params}, batch["next_observations"])
+        next_vh = jax.lax.stop_gradient(next_vh)
+
+        h_sa = batch["costs"]  # x = h(s,a)
+        y = next_vh
+
+        if agent.mode == 1:  # FISOR
+            target_qh = (1.0 - agent.gamma) * h_sa + agent.gamma * jnp.minimum(h_sa, y)
+        elif agent.mode == 2:  # Value-as-Barrier (Additive Bellman)
+            target_qh = h_sa + agent.gamma * y - (1.0 - agent.gamma) * agent.R
+        elif agent.mode == 3:  # Reachability Constrained RL
+            target_qh = jnp.minimum(h_sa, y)
+        else:
+            raise ValueError(f"Unknown CBF mode: {agent.mode}")
+
+        target_qh = jax.lax.stop_gradient(target_qh)
+
+        def qh_loss_fn(safe_critic_params):
+            qhs = agent.safe_critic.apply_fn(
+                {"params": safe_critic_params},
+                batch["observations"], batch["actions"]
+            )
+            loss = ((qhs - target_qh) ** 2).mean()
+            info = {
+                "loss": loss,
+                "q_h": qhs.mean(),
+                "q_h_target": target_qh.mean(),
+            }
+            return loss, info
+
+        qh_grads, qh_info = jax.grad(qh_loss_fn, has_aux=True)(agent.safe_critic.params)
+        safe_critic = agent.safe_critic.apply_gradients(grads=qh_grads)
+
+        # 3) Soft-update targets
+        safe_target_critic_params = optax.incremental_update(
+            safe_critic.params, agent.safe_target_critic.params, agent.tau
+        )
+        safe_target_critic = agent.safe_target_critic.replace(params=safe_target_critic_params)
+
+        safe_target_value_params = optax.incremental_update(
+            safe_value.params, agent.safe_target_value.params, agent.tau
+        )
+        safe_target_value = agent.safe_target_value.replace(params=safe_target_value_params)
+
+        new_agent = agent.replace(
+            safe_value=safe_value,
+            safe_target_value=safe_target_value,
+            safe_critic=safe_critic,
+            safe_target_critic=safe_target_critic,
+        )
+
+        return new_agent, {**vh_info, **qh_info}
+
     
+    # @jax.jit
+    def update_o(self, batch: DatasetDict):
+        new_agent = self
+        batch_size = batch['observations'].shape[0]
+        mini_batch_size = min(256, batch_size)
+        
+        def mini_slice(x):
+            return x[:mini_batch_size]
+        
+        mini_batch = jax.tree_util.tree_map(mini_slice, batch)
+        
+        # IQL-like cost critic updates (Section 3.1)
+        # new_agent, cost_critic_info = new_agent.iql(mini_batch)
+        # new_agent, cost_critic_info = new_agent.cbf(mini_batch)
+        # new_agent, cost_critic_info = new_agent.cbf_good(mini_batch)
+
+        # Original CBF updates (Equations 5, 6, 7) - keep for comparison
+        new_agent, vh_info = new_agent.update_Vh(mini_batch)
+        new_agent, qh_info = new_agent.update_Qh(mini_batch)
+        
+        # Reward updates
+        new_agent, vr_info = new_agent.update_Vr(mini_batch)
+        new_agent, qr_info = new_agent.update_Qr(mini_batch)
+        
+        # Actor updates
+        half_size = batch_size // 2
+        first_batch = jax.tree_util.tree_map(lambda x: x[:half_size], batch)
+        second_batch = jax.tree_util.tree_map(lambda x: x[half_size:], batch)
+        
+        new_agent, _ = new_agent.update_actor(first_batch)
+        new_agent, actor_info = new_agent.update_actor(second_batch)
+        
+        info = {
+            # **cost_critic_info,
+            **vh_info,
+            **qh_info,
+            **vr_info,
+            **qr_info,
+            **actor_info
+        }
+        return new_agent, info
+
+
+    def update_r(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
+        """Combined reward critic and value function update."""
+        
+        # Step 1: Update V_r (Equation 4)
+        qs = agent.target_critic.apply_fn(
+            {"params": agent.target_critic.params},
+            batch["observations"], batch["actions"]
+        )
+        q = jnp.min(qs, axis=0)
+        
+        def Vr_loss(value_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
+            v = agent.value.apply_fn({"params": value_params}, batch["observations"])
+            loss = expectile_loss(q - v, agent.critic_hyperparam).mean()  # τ → 1
+            return loss, {"v_r_loss": loss, "v_r": v.mean()}
+        
+        vr_grads, vr_info = jax.grad(Vr_loss, has_aux=True)(agent.value.params)
+        value = agent.value.apply_gradients(grads=vr_grads)
+        
+        # Step 2: Update Q_r (Equation 3)
+        qh = agent.safe_critic.apply_fn(
+            {"params": agent.safe_critic.params},
+            batch["observations"], batch["actions"]
+        )
+        qh_min = jnp.min(qh, axis=0)
+        
+        next_vr = value.apply_fn(
+            {"params": value.params}, batch["next_observations"]
+        )
+        
+        safe_mask = (qh_min <= 0)  # Q_h(s,a) ≤ 0
+        unsafe_mask = (qh_min > 0)  # Q_h(s,a) > 0
+        safe_target = batch["rewards"] + agent.discount * batch["masks"] * next_vr
+        unsafe_target = agent.r_min / (1 - agent.discount) - qh_min
+        target_q = safe_mask * safe_target + unsafe_mask * unsafe_target
+        
+        def Qr_loss(critic_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
+            qs = agent.critic.apply_fn(
+                {"params": critic_params},
+                batch["observations"], batch["actions"]
+            )
+            loss = ((qs - target_q) ** 2).mean()
+            return loss, {"q_r_loss": loss, "q_r": qs.mean()}
+        
+        qr_grads, qr_info = jax.grad(Qr_loss, has_aux=True)(agent.critic.params)
+        critic = agent.critic.apply_gradients(grads=qr_grads)
+        
+        # Update target networks
+        target_critic_params = optax.incremental_update(
+            critic.params, agent.target_critic.params, agent.tau
+        )
+        target_critic = agent.target_critic.replace(params=target_critic_params)
+        
+        new_agent = agent.replace(
+            value=value,
+            critic=critic,
+            target_critic=target_critic
+        )
+        
+        return new_agent, {**vr_info, **qr_info}
+
+
+    def update_h(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
+        """Combined safety critic and value function update."""
+        
+        # Step 1: Update V_h (Equation 5)
+        qcs = agent.safe_target_critic.apply_fn(
+            {"params": agent.safe_target_critic.params},
+            batch["observations"], batch["actions"]
+        )
+        qc = qcs.max(axis=0)  # max over ensemble
+        
+        def Vh_loss(safe_value_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
+            vh = agent.safe_value.apply_fn({"params": safe_value_params}, batch["observations"])
+            loss = expectile_loss(qc - vh, agent.cost_critic_hyperparameter).mean()
+            return loss, {"vh_loss": loss, "v_h": vh.mean()}
+        
+        vh_grads, vh_info = jax.grad(Vh_loss, has_aux=True)(agent.safe_value.params)
+        safe_value = agent.safe_value.apply_gradients(grads=vh_grads)
+        
+        # Step 2: Update Q_h (Equation 6/7 depending on mode)
+        next_vh = safe_value.apply_fn(
+            {"params": safe_value.params}, batch["next_observations"]
+        )
+        
+        h_sa = batch["costs"]
+        
+        if agent.mode == 1:  # FISOR
+            target_qh = (1 - agent.gamma) * h_sa + agent.gamma * jnp.minimum(h_sa, next_vh)
+        elif agent.mode == 2:  # Value-as-Barrier (Additive Bellman)
+            target_qh = h_sa + agent.gamma * next_vh - (1 - agent.gamma) * agent.R
+        elif agent.mode == 3:  # Reachability Constrained RL
+            target_qh = jnp.minimum(h_sa, next_vh)
+        else:
+            raise ValueError(f"Unknown CBF mode: {agent.mode}")
+        
+        def Qh_loss(safe_critic_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
+            qhs = agent.safe_critic.apply_fn(
+                {"params": safe_critic_params},
+                batch["observations"], batch["actions"]
+            )
+            # qh_loss = ((qhs - target_qh) ** 2).mean()
+            # TD
+            qh_loss = jnp.abs(qhs - target_qh).mean()
+
+            def huber_loss(diff, delta=1.0):
+                abs_diff = jnp.abs(diff)
+                quadratic = jnp.minimum(abs_diff, delta)
+                linear = abs_diff - quadratic
+                return 0.5 * quadratic ** 2 + delta * linear
+
+            # qh_loss = huber_loss(qhs - target_qh).mean()
+            return qh_loss, {"qh_loss": qh_loss, "q_h": qhs.mean()}
+        
+        qh_grads, qh_info = jax.grad(Qh_loss, has_aux=True)(agent.safe_critic.params)
+        safe_critic = agent.safe_critic.apply_gradients(grads=qh_grads)
+        
+        # Update target networks
+        safe_target_critic_params = optax.incremental_update(
+            safe_critic.params, agent.safe_target_critic.params, agent.tau
+        )
+        safe_target_critic = agent.safe_target_critic.replace(params=safe_target_critic_params)
+        
+        new_agent = agent.replace(
+            safe_value=safe_value,
+            safe_critic=safe_critic,
+            safe_target_critic=safe_target_critic
+        )
+        
+        return new_agent, {**vh_info, **qh_info}
+
+
+
+
     @jax.jit
     def update(self, batch: DatasetDict):
         new_agent = self
         batch_size = batch['observations'].shape[0]
         mini_batch_size = min(256, batch_size)
         
-        # Split batch for actor updates (like update_old)
-        half_size = batch_size // 2
-        
-        def first_half(x):
-            return x[:half_size]
-        
-        def second_half(x):
-            return x[half_size:]
-        
         def mini_slice(x):
             return x[:mini_batch_size]
         
-        first_batch = jax.tree_util.tree_map(first_half, batch)
-        second_batch = jax.tree_util.tree_map(second_half, batch)
         mini_batch = jax.tree_util.tree_map(mini_slice, batch)
         
-        # Actor updates with split batches for better exploration
-        new_agent, actor_info_1 = new_agent.update_actor(first_batch)
-        new_agent, actor_info_2 = new_agent.update_actor(second_batch)
+        # Combined safety critic updates (V_h and Q_h)
+        new_agent, h_info = new_agent.update_h(mini_batch)
         
-        # Combine actor infos, averaging metrics
-        actor_info = {
-            k: (actor_info_1.get(k, 0.0) + actor_info_2.get(k, 0.0)) / 2.0 
-            for k in set(actor_info_1.keys()).union(actor_info_2.keys())
-        }
+        # Combined reward critic updates (V_r and Q_r)
+        new_agent, r_info = new_agent.update_r(mini_batch)
         
-        # CBF and reward updates use full batch for stability
-        new_agent, cbf_info = new_agent.update_cbf(batch)
-        new_agent, reward_info = new_agent.update_reward(batch)
+        # Actor updates
+        half_size = batch_size // 2
+        first_batch = jax.tree_util.tree_map(lambda x: x[:half_size], batch)
+        second_batch = jax.tree_util.tree_map(lambda x: x[half_size:], batch)
         
-        # Value updates use mini batch for efficiency
-        new_agent, value_info = new_agent.update_value(mini_batch)
+        new_agent, _ = new_agent.update_actor(first_batch)
+        new_agent, actor_info = new_agent.update_actor(second_batch)
         
-        # Combine all info dictionaries
         info = {
-            # **actor_info,
-            **cbf_info,
-            **reward_info,
-            **value_info,
+            **h_info,
+            **r_info,
+            **actor_info
         }
         return new_agent, info
-    
+
+
     def save(self, modeldir, save_time):
         file_name = 'model' + str(save_time) + '.pickle'
         state_dict = flax.serialization.to_state_dict(self)
         pickle.dump(state_dict, open(os.path.join(modeldir, file_name), 'wb'))
+
     def load(self, model_location):
         pkl_file = pickle.load(open(model_location, 'rb'))
         new_agent = flax.serialization.from_state_dict(target=self, state=pkl_file)

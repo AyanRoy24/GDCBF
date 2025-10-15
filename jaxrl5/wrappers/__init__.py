@@ -1,9 +1,9 @@
-import gymnasium as gym
-from gymnasium.wrappers.flatten_observation import FlattenObservation
+# import gymnasium as gym
+# from gymnasium.wrappers.flatten_observation import FlattenObservation
+# from jaxrl5.wrappers.single_precision import SinglePrecision
+import gym
+from gym.wrappers.flatten_observation import FlattenObservation
 from jaxrl5.wrappers.single_precision import SinglePrecision
-# import gym
-# from gym.wrappers.flatten_observation import FlattenObservation
-# from jaxrl5.wrappers.single_precision_md import SinglePrecision
 
 
 def wrap_gym(env: gym.Env, rescale_actions: bool = True, cost_limit: int = 1) -> gym.Env:

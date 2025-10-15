@@ -1,5 +1,6 @@
 import os
-import gymnasium as gym
+# import gymnasium as gym
+import gym
 import dsrl
 import numpy as np
 from jaxrl5.data.dataset import Dataset
@@ -49,8 +50,8 @@ class DSRLDataset(Dataset):
             del dataset_dict["terminals"]
             del dataset_dict['timeouts']
 
-            if critic_type == "hj":
-                dataset_dict['costs'] = np.where(dataset_dict['costs']>0, 1*cost_scale, -1)
+            # if critic_type == "hj":
+            dataset_dict['costs'] = np.where(dataset_dict['costs']>0, 1*cost_scale, -1)
 
         if clip_to_eps:
             lim = 1 - eps

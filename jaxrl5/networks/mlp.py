@@ -48,7 +48,6 @@ class MLP(nn.Module):
                 x = self.activations(x)
         return x
 
-
 class GaussianPolicy(nn.Module):
     hidden_dims: Sequence[int]
     action_dim: int
@@ -84,4 +83,3 @@ class GaussianPolicy(nn.Module):
             return distrax.Transformed(base_dist, tanh_bijector)
         else:
             return base_dist
-
