@@ -295,7 +295,7 @@ class CBF(Agent):
         next_vh = agent.safe_value.apply_fn(
             {"params": agent.safe_value.params}, batch["next_observations"]
         )        
-        h_sa = batch["costs"]
+        h_sa = -batch["costs"]
         if agent.mode == 1:  # FISOR
             target_qh = (1 - agent.gamma) * h_sa + agent.gamma * jnp.minimum(h_sa, next_vh)
         elif agent.mode == 2:  # Value-as-Barrier (Additive Bellman)
@@ -405,7 +405,7 @@ class CBF(Agent):
         return new_agent, info
 
 
-    def eval_actions_old(self, observations: jnp.ndarray):
+    def eval_actions_(self, observations: jnp.ndarray):
         rng = self.rng
         assert len(observations.shape) == 1
         observations = jax.device_put(observations)
@@ -525,7 +525,7 @@ class CBF(Agent):
         
         return new_agent, {**v_info, **q_info}
 
-    def cbf_good(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
+    def cbf_(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]: # results same as iql
         
         def loss(cost_value_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
             v_pred = agent.safe_value.apply_fn({"params": cost_value_params}, batch["observations"])
@@ -576,7 +576,7 @@ class CBF(Agent):
         next_vh = safe_value.apply_fn({"params": safe_value.params}, batch["next_observations"])
         next_vh = jax.lax.stop_gradient(next_vh)
 
-        h_sa = batch["costs"]  # x = h(s,a)
+        h_sa = -batch["costs"]  # x = h(s,a)
         y = next_vh
 
         if agent.mode == 1:  # FISOR
@@ -627,8 +627,8 @@ class CBF(Agent):
         return new_agent, {**vh_info, **qh_info}
 
     
-    # @jax.jit
-    def update_o(self, batch: DatasetDict):
+    @jax.jit
+    def update(self, batch: DatasetDict):
         new_agent = self
         batch_size = batch['observations'].shape[0]
         mini_batch_size = min(256, batch_size)
@@ -637,20 +637,7 @@ class CBF(Agent):
             return x[:mini_batch_size]
         
         mini_batch = jax.tree_util.tree_map(mini_slice, batch)
-        
-        # IQL-like cost critic updates (Section 3.1)
-        # new_agent, cost_critic_info = new_agent.iql(mini_batch)
-        # new_agent, cost_critic_info = new_agent.cbf(mini_batch)
-        # new_agent, cost_critic_info = new_agent.cbf_good(mini_batch)
 
-        # Original CBF updates (Equations 5, 6, 7) - keep for comparison
-        new_agent, vh_info = new_agent.update_Vh(mini_batch)
-        new_agent, qh_info = new_agent.update_Qh(mini_batch)
-        
-        # Reward updates
-        new_agent, vr_info = new_agent.update_Vr(mini_batch)
-        new_agent, qr_info = new_agent.update_Qr(mini_batch)
-        
         # Actor updates
         half_size = batch_size // 2
         first_batch = jax.tree_util.tree_map(lambda x: x[:half_size], batch)
@@ -658,6 +645,19 @@ class CBF(Agent):
         
         new_agent, _ = new_agent.update_actor(first_batch)
         new_agent, actor_info = new_agent.update_actor(second_batch)
+
+        # IQL-like cost critic updates (Section 3.1)
+        # new_agent, cost_critic_info = new_agent.iql(batch)
+        # new_agent, cost_critic_info = new_agent.cbf_(batch)
+        # new_agent, cost_critic_info = new_agent.cbf(batch)
+
+        # Original CBF updates (Equations 5, 6, 7) - keep for comparison
+        new_agent, vh_info = new_agent.update_Vh(batch)
+        new_agent, qh_info = new_agent.update_Qh(batch)
+        
+        # Reward updates
+        new_agent, vr_info = new_agent.update_Vr(batch)
+        new_agent, qr_info = new_agent.update_Qr(batch)
         
         info = {
             # **cost_critic_info,
@@ -698,9 +698,9 @@ class CBF(Agent):
         next_vr = value.apply_fn(
             {"params": value.params}, batch["next_observations"]
         )
-        
-        safe_mask = (qh_min <= 0)  # Q_h(s,a) ≤ 0
-        unsafe_mask = (qh_min > 0)  # Q_h(s,a) > 0
+
+        safe_mask = (qh_min <= 0)  # Q_h(s,a) ≥ 0
+        unsafe_mask = (qh_min > 0)  # Q_h(s,a) < 0
         safe_target = batch["rewards"] + agent.discount * batch["masks"] * next_vr
         unsafe_target = agent.r_min / (1 - agent.discount) - qh_min
         target_q = safe_mask * safe_target + unsafe_mask * unsafe_target
@@ -772,7 +772,7 @@ class CBF(Agent):
             )
             # qh_loss = ((qhs - target_qh) ** 2).mean()
             # TD
-            qh_loss = jnp.abs(qhs - target_qh).mean()
+            # qh_loss = jnp.abs(qhs - target_qh).mean()
 
             def huber_loss(diff, delta=1.0):
                 abs_diff = jnp.abs(diff)
@@ -780,7 +780,7 @@ class CBF(Agent):
                 linear = abs_diff - quadratic
                 return 0.5 * quadratic ** 2 + delta * linear
 
-            # qh_loss = huber_loss(qhs - target_qh).mean()
+            qh_loss = huber_loss(qhs - target_qh).mean()
             return qh_loss, {"qh_loss": qh_loss, "q_h": qhs.mean()}
         
         qh_grads, qh_info = jax.grad(Qh_loss, has_aux=True)(agent.safe_critic.params)
@@ -803,8 +803,8 @@ class CBF(Agent):
 
 
 
-    @jax.jit
-    def update(self, batch: DatasetDict):
+    # @jax.jit
+    def update_(self, batch: DatasetDict):
         new_agent = self
         batch_size = batch['observations'].shape[0]
         mini_batch_size = min(256, batch_size)
@@ -812,14 +812,14 @@ class CBF(Agent):
         def mini_slice(x):
             return x[:mini_batch_size]
         
-        mini_batch = jax.tree_util.tree_map(mini_slice, batch)
+        # mini_batch = jax.tree_util.tree_map(mini_slice, batch)
         
         # Combined safety critic updates (V_h and Q_h)
-        new_agent, h_info = new_agent.update_h(mini_batch)
+        new_agent, h_info = new_agent.update_h(batch)
         
         # Combined reward critic updates (V_r and Q_r)
-        new_agent, r_info = new_agent.update_r(mini_batch)
-        
+        new_agent, r_info = new_agent.update_r(batch)
+
         # Actor updates
         half_size = batch_size // 2
         first_batch = jax.tree_util.tree_map(lambda x: x[:half_size], batch)

@@ -13,8 +13,8 @@ import yaml
 from ml_collections import config_flags, ConfigDict
 import wandb
 from tqdm.auto import trange  # noqa
-# import gymnasium as gym
-import gym
+import gymnasium as gym
+# import gym
 from env.env_list import env_list
 from env.point_robot import PointRobot
 from jaxrl5.wrappers import wrap_gym
@@ -102,12 +102,16 @@ def main(_):
     elif FLAGS.mode == 2: algo = 'value'
     elif FLAGS.mode == 3: algo = 'RCRL'
     else: raise ValueError('Wrong mode')
-    parameters['experiment_name'] = str(FLAGS.env_id) + '_' + algo + '_' + str(parameters['env_name']) #+ '_' + str(parameters['seed'])
+    parameters['experiment_name'] = str(FLAGS.env_id) + '_' + algo + '_' + str(parameters['env_name']) + '_' + str(parameters['seed'])
     if parameters['env_name'] == 'PointRobot':
         parameters['max_steps'] = 100001
         parameters['batch_size'] = 1024
         parameters['eval_interval'] = 25000
+        parameters['agent_kwargs']['cost_temperature'] = 2
         parameters['agent_kwargs']['reward_temperature'] = 5
+        parameters['agent_kwargs']['cost_ub'] = 150
+        parameters['agent_kwargs']['N'] = 8
+
     print(parameters)
 
     if not os.path.exists(f"./results/{parameters['env_name']}/{parameters['seed']}"):
