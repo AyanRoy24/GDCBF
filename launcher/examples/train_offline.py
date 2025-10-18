@@ -13,8 +13,8 @@ import yaml
 from ml_collections import config_flags, ConfigDict
 import wandb
 from tqdm.auto import trange  # noqa
-# import gymnasium as gym
-import gym
+import gymnasium as gym
+# import gym
 from env.env_list import env_list
 from env.point_robot import PointRobot
 from jaxrl5.wrappers import wrap_gym
@@ -22,6 +22,11 @@ from jaxrl5.agents import CBF
 from jaxrl5.data.dsrl_datasets import DSRLDataset
 from jaxrl5.evaluation import evaluate, evaluate_pr #, plot_cbf_cost_vs_safe_value, calculate_coverage
 import json
+import dsrl
+# disable jit
+# jax.config.update("jax_disable_jit", True)
+# use cpu
+# jax.config.update('jax_platform_name', 'cpu')
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer('env_id', 30, 'Choose env')
@@ -63,6 +68,7 @@ def call_main(details):
         env = wrap_gym(env, cost_limit=details['agent_kwargs']['cost_limit'])
         ds.normalize_returns(env.max_episode_reward, env.min_episode_reward, env_max_steps)
     ds.seed(details["seed"])
+
     config_dict = dict(details['agent_kwargs'])
     model_cls = config_dict.pop("model_cls") 
     config_dict.pop("cost_scale") 
@@ -72,6 +78,8 @@ def call_main(details):
     save_time = 1
     for i in trange(details['max_steps'], smoothing=0.1, desc=details['experiment_name']):
         sample = ds.sample_jax(details['batch_size'])     
+        # print("--------\n\n")
+        # print(sample['observations'], sample['observations'].shape, sample['observations'].dtype)
         agent, info = agent.update(sample)
         if i % details['log_interval'] == 0:
             wandb.log({f"train/{k}": v for k, v in info.items()}, step=i)

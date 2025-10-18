@@ -5,7 +5,7 @@ import flax
 import distrax
 
 
-default_init = nn.initializers.xavier_uniform
+default_init = nn.initializers.uniform
 
 def get_weight_decay_mask(params):
     flattened_params = flax.traverse_util.flatten_dict(
@@ -37,6 +37,7 @@ class MLP(nn.Module):
             if i + 1 == len(self.hidden_dims) and self.scale_final is not None:
                 x = nn.Dense(size, kernel_init=default_init(self.scale_final))(x)
             else:
+                # print(">>", x.dtype, type(x))
                 x = nn.Dense(size, kernel_init=default_init())(x)
             if self.use_layer_norm:
                 x = nn.LayerNorm()(x)

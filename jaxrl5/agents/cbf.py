@@ -38,7 +38,6 @@ def compute_safe_q(safe_critic_fn, safe_critic_params, observations, actions):
 
 class CBF(Agent):
     score_model: TrainState
-    target_score_model: TrainState
     critic: TrainState
     target_critic: TrainState
     value: TrainState
@@ -108,14 +107,14 @@ class CBF(Agent):
             1 - discount) / env_max_steps                
         if decay_steps is not None:
             actor_lr = optax.cosine_decay_schedule(actor_lr, decay_steps)
-
+        print("Actor hidden", actor_hidden_dims)
+        # exit()
         actor_def = GaussianPolicy(hidden_dims=actor_hidden_dims, action_dim=action_dim)        
-        time = jnp.zeros((1, 1))
+        # time = jnp.zeros((1, 1))
         observations = jnp.expand_dims(observations, axis = 0)
         actions = jnp.expand_dims(actions, axis = 0)
         # if actor_architecture == 'gaussian':
-        actor_params = actor_def.init(actor_key, observations,
-                                            time)['params']
+        actor_params = actor_def.init(actor_key, observations)['params']
         # else:
         #     actor_params = actor_def.init(actor_key, observations, actions,
         #                                 time)['params']        
@@ -125,10 +124,10 @@ class CBF(Agent):
                                         tx=optax.adamw(learning_rate=actor_lr, 
                                                        weight_decay=actor_weight_decay if actor_weight_decay is not None else 0.0,
                                                        mask=get_weight_decay_mask,))        
-        target_score_model = TrainState.create(apply_fn=actor_def.apply,
-                                               params=actor_params,
-                                               tx=optax.GradientTransformation(
-                                                    lambda _: None, lambda _: None))
+        # target_score_model = TrainState.create(apply_fn=actor_def.apply,
+        #                                        params=actor_params,
+        #                                        tx=optax.GradientTransformation(
+        #                                             lambda _: None, lambda _: None))
 
         critic_base_cls = partial(MLP, hidden_dims=critic_hidden_dims, activate_final=True)
         critic_cls = partial(StateActionValue, base_cls=critic_base_cls)
@@ -209,7 +208,7 @@ class CBF(Agent):
             qh_penalty_scale=qh_penalty_scale,
             mode=mode,
             qc_thres=qc_thres,
-            target_score_model=target_score_model,
+            # target_score_model=target_score_model,
             actor_tau=actor_tau,
             cost_temperature=cost_temperature,
             cost_ub=cost_ub,
@@ -297,11 +296,11 @@ class CBF(Agent):
         )        
         h_sa = batch["costs"]
         if agent.mode == 1:  # FISOR
-            target_qh = (1 - agent.gamma) * h_sa + agent.gamma * jnp.minimum(h_sa, next_vh)
+            target_qh = (1 - agent.gamma) * h_sa + agent.gamma * jnp.maximum(h_sa, next_vh)
         elif agent.mode == 2:  # Value-as-Barrier (Additive Bellman)
             target_qh = h_sa + agent.gamma * next_vh - (1 - agent.gamma) * agent.R
         elif agent.mode == 3:  # Reachability Constrained RL
-            target_qh = jnp.minimum(h_sa, next_vh)
+            target_qh = jnp.maximum(h_sa, next_vh)
         else:
             raise ValueError(f"Unknown CBF mode: {agent.mode}")
         
@@ -326,23 +325,23 @@ class CBF(Agent):
 
 
     def update_actor(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
-        rng = agent.rng
-        key, rng = jax.random.split(rng, 2)
+        # rng = agent.rng
+        # key, rng = jax.random.split(rng, 2)
         qs = agent.target_critic.apply_fn({"params": agent.target_critic.params}, batch["observations"], batch["actions"])
         q = qs.min(axis=0)
         v = agent.value.apply_fn({"params": agent.value.params}, batch["observations"])
-        qcs = agent.safe_target_critic.apply_fn(
-            {"params": agent.safe_target_critic.params},
-            batch["observations"], batch["actions"],
-        )
-        qc = qcs.max(axis=0)
-        vc = agent.safe_value.apply_fn({"params": agent.safe_value.params}, batch["observations"])     
+        # qcs = agent.safe_target_critic.apply_fn(
+        #     {"params": agent.safe_target_critic.params},
+        #     batch["observations"], batch["actions"],
+        # )
+        # qc = qcs.max(axis=0)
+        # vc = agent.safe_value.apply_fn({"params": agent.safe_value.params}, batch["observations"])     
         # qc = qc - agent.qc_thres
         # vc = vc - agent.qc_thres
         
         # Convert to barrier function: h = -qh (so h > 0 is safe, h < 0 is unsafe)
-        h = -qc
-        vh = -vc
+        # h = -qc
+        # vh = -vc
         # Penalize unsafe states (h < 0) more heavily
         # Safe states (h >= 0): use reward advantage
         # Unsafe states (h < 0): use barrier penalty
@@ -355,6 +354,7 @@ class CBF(Agent):
         reward_adv = q - v
         reward_weights = jnp.exp(reward_adv * agent.reward_temperature)
         reward_weights = jnp.clip(reward_weights, 0, 100)
+        weights = reward_weights
         
         # Barrier-based penalty for unsafe states
         # Penalize actions with h < 0 (unsafe)
@@ -363,15 +363,15 @@ class CBF(Agent):
         # barrier_penalty = jnp.clip(barrier_penalty, 0, agent.cost_ub)
         
         # Use Q_h directly (no negation)
-        safe_mask = (qc <= 0)  # Q_h ≤ 0 means safe
-        unsafe_mask = (qc > 0)  # Q_h > 0 means unsafe
+        # safe_mask = (qc <= 0)  # Q_h ≤ 0 means safe
+        # unsafe_mask = (qc > 0)  # Q_h > 0 means unsafe
 
         # Barrier advantage (more unsafe = higher Q_h = worse)
-        barrier_adv = qc - vc  # If qc > vc, this action makes things worse
-        barrier_penalty = jnp.exp(-barrier_adv * agent.cost_temperature)  # Penalize positive Q_h
-        barrier_penalty = jnp.clip(barrier_penalty, 0, agent.cost_ub)
+        # barrier_adv = qc - vc  # If qc > vc, this action makes things worse
+        # barrier_penalty = jnp.exp(-barrier_adv * agent.cost_temperature)  # Penalize positive Q_h
+        # barrier_penalty = jnp.clip(barrier_penalty, 0, agent.cost_ub)
         # Combine weights: use reward weights for safe states, barrier penalty for unsafe
-        weights = safe_mask * reward_weights + unsafe_mask * barrier_penalty
+        # weights = safe_mask * reward_weights # + unsafe_mask * barrier_penalty
 
         # unsafe_condition = jax.nn.sigmoid((vc - eps) * 10.0)  # Smooth transition
         # safe_condition = jax.nn.sigmoid((-vc - eps) * 10.0) * jax.nn.sigmoid((-qc - eps) * 10.0)        
@@ -389,6 +389,7 @@ class CBF(Agent):
         # weights = unsafe_weights + safe_weights
 
         def actor_loss_fn(actor_params: FrozenDict[str, Any]):
+            print(batch['observations'].shape)
             dist = agent.score_model.apply_fn({"params": actor_params}, batch["observations"])
             log_probs = dist.log_prob(batch['actions'])
             actor_loss = -(log_probs * weights).mean() 
@@ -397,12 +398,12 @@ class CBF(Agent):
         grads, info = jax.grad(actor_loss_fn, has_aux=True)(agent.score_model.params)
         score_model = agent.score_model.apply_gradients(grads=grads)
         agent = agent.replace(score_model=score_model)
-        target_score_params = optax.incremental_update(
-            score_model.params, agent.target_score_model.params, agent.actor_tau
-        )        
-        target_score_model = agent.target_score_model.replace(params=target_score_params)
-        new_agent = agent.replace(score_model=score_model, target_score_model=target_score_model, rng=rng)
-        return new_agent, info
+        # target_score_params = optax.incremental_update(
+        #     score_model.params, agent.target_score_model.params, agent.actor_tau
+        # )        
+        # target_score_model = agent.target_score_model.replace(params=target_score_params)
+        # new_agent = agent.replace(score_model=score_model)
+        return agent, info
 
 
     def eval_actions_old(self, observations: jnp.ndarray):
@@ -440,8 +441,8 @@ class CBF(Agent):
         
         # Sample actions from the learned Gaussian policy
         rng, key = jax.random.split(rng, 2)
-        dist = self.target_score_model.apply_fn(
-            {"params": self.target_score_model.params}, 
+        dist = self.score_model.apply_fn(
+            {"params": self.score_model.params}, 
             observations_batch
         )
         actions = dist.sample(seed=key)
@@ -757,11 +758,11 @@ class CBF(Agent):
         h_sa = batch["costs"]
         
         if agent.mode == 1:  # FISOR
-            target_qh = (1 - agent.gamma) * h_sa + agent.gamma * jnp.minimum(h_sa, next_vh)
+            target_qh = (1 - agent.gamma) * h_sa + agent.gamma * jnp.maximum(h_sa, next_vh)
         elif agent.mode == 2:  # Value-as-Barrier (Additive Bellman)
             target_qh = h_sa + agent.gamma * next_vh - (1 - agent.gamma) * agent.R
         elif agent.mode == 3:  # Reachability Constrained RL
-            target_qh = jnp.minimum(h_sa, next_vh)
+            target_qh = jnp.maximum(h_sa, next_vh)
         else:
             raise ValueError(f"Unknown CBF mode: {agent.mode}")
         
@@ -822,11 +823,11 @@ class CBF(Agent):
         
         # Actor updates
         half_size = batch_size // 2
-        first_batch = jax.tree_util.tree_map(lambda x: x[:half_size], batch)
-        second_batch = jax.tree_util.tree_map(lambda x: x[half_size:], batch)
+        # first_batch = jax.tree_util.tree_map(lambda x: x[:half_size], batch)
+        # second_batch = jax.tree_util.tree_map(lambda x: x[half_size:], batch)
         
-        new_agent, _ = new_agent.update_actor(first_batch)
-        new_agent, actor_info = new_agent.update_actor(second_batch)
+        # new_agent, _ = new_agent.update_actor(first_batch)
+        new_agent, actor_info = new_agent.update_actor(batch)
         
         info = {
             **h_info,
