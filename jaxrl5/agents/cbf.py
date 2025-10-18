@@ -53,7 +53,7 @@ class CBF(Agent):
     cost_critic_hyperparameter: float     
     extract_method: str = struct.field(pytree_node=False)
     action_dim: int = struct.field(pytree_node=False)
-    N: int #How many samples per observation
+    N: int=struct.field(pytree_node=False)  #How many samples per observation
     R: float = struct.field(pytree_node=False)  # for 'add' mode
     cost_temperature: float
     reward_temperature: float
@@ -253,36 +253,38 @@ class CBF(Agent):
         new_rng = rng
         return np.array(action.squeeze()), self.replace(rng=new_rng)
 
+    @jax.jit
     def eval_actions(self, observations: jnp.ndarray):
         rng = self.rng
         assert len(observations.shape) == 1
-        observations = jax.device_put(observations)
-        observations_batch = jnp.expand_dims(observations, axis=0).repeat(self.N, axis=0)
+        # observations = jax.device_put(observations)
+        observations_batch = jnp.expand_dims(observations, axis=0)# .repeat(self.N, axis=0)
         # we sample N action candidates and select the safest one (i.e., the lowest Q*_h value) as the final output
         
         # Sample actions from the learned Gaussian policy
-        rng, key = jax.random.split(rng, 2)
+        # rng, key = jax.random.split(rng, 2)
         dist = self.score_model.apply_fn(
             {"params": self.score_model.params}, 
-            observations_batch
+            observations_batch,
+            temperature=0
         )
-        actions = dist.sample(seed=key)
+        actions = dist.sample(seed=self.rng)
         
-        qs = compute_q(self.target_critic.apply_fn, self.target_critic.params, observations_batch, actions)
-        qcs = compute_safe_q(self.safe_target_critic.apply_fn, self.safe_target_critic.params, observations_batch, actions)
+        # qs = compute_q(self.target_critic.apply_fn, self.target_critic.params, observations_batch, actions)
+        # qcs = compute_safe_q(self.safe_target_critic.apply_fn, self.safe_target_critic.params, observations_batch, actions)
         # Evaluate Safety (Q*_h value) for Each Action using compute_safe_q hich computes the Q*_h value (cost critic value) for each action.
         # qcs = qcs - self.qc_thres
-        if self.extract_method == 'maxq':
-            idx = jnp.argmax(qs)
-        elif self.extract_method == 'minqc':
-            idx = jnp.argmin(qcs)
-            # Select the Safest Action (Lowest Q*_h)
-        else:
-            raise ValueError(f'Invalid extract_method: {self.extract_method}')
+        # if self.extract_method == 'maxq':
+        #     idx = jnp.argmax(qs)
+        # elif self.extract_method == 'minqc':
+        #     idx = jnp.argmin(qcs)
+        #     # Select the Safest Action (Lowest Q*_h)
+        # else:
+        #     raise ValueError(f'Invalid extract_method: {self.extract_method}')
         
-        action = actions[idx]
+        action = actions[0]
         new_rng = rng
-        return np.array(action.squeeze()), self.replace(rng=new_rng)
+        return action.squeeze(), self.replace(rng=new_rng)
 
 
     def update_r(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:

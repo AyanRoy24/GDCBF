@@ -6,10 +6,10 @@ def get_config(config_string):
         project='cbf3',
         seed=-1,
         max_steps=100001,
-        eval_episodes=2,
+        eval_episodes=20,
         batch_size=512, #Actor batch size x 2 (so really 1024), critic is fixed to 256
         log_interval=1000,
-        eval_interval=100_000,
+        eval_interval=25_000,
         normalize_returns=True,
     )
 
@@ -30,11 +30,11 @@ def get_config(config_string):
                     reward_temperature=3.0,
                     cost_temperature=2.0,
                     critic_hyperparam=0.95,
-                    cost_critic_hyperparameter=0.01,
+                    cost_critic_hyperparameter=0.3,
                     qh_penalty_scale=0.5,
                     r_min=-0.001,
                     R=0.6,
-                    N=128,
+                    N=1,
                     gamma=0.995,
                     actor_lr=3e-4,
                     critic_lr=3e-4,
