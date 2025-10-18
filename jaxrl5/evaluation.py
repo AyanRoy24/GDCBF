@@ -70,7 +70,8 @@ def evaluate(agent, env: gym.Env, num_episodes: int, save_video: bool = False, r
                 env.render()
                 time.sleep(1e-3)
                 
-            action, agent = agent.eval_actions(obs)
+            action, agent = agent.eval_actions(jnp.array(obs))
+            action = np.array(action)
             
             # Get barrier value (safe value function) - raw Q_h values
             barrier_value = agent.safe_value.apply_fn(
