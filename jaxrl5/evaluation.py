@@ -74,19 +74,13 @@ def evaluate(agent, env: gym.Env, num_episodes: int, save_video: bool = False, r
             action = np.array(action)
             
             # Get barrier value (safe value function) - raw Q_h values
-            barrier_value = agent.safe_value.apply_fn(
-                {"params": agent.safe_value.params},
-                jnp.expand_dims(obs, axis=0)
-            ).item()
+            barrier_value = agent.barrier_values(jnp.expand_dims(obs, axis=0)).item()
             
             barriers.append(barrier_value)
             
             next_obs, reward, terminated, truncated, info = env.step(action)
             
-            next_barrier_value = agent.safe_value.apply_fn(
-                {"params": agent.safe_value.params},
-                jnp.expand_dims(next_obs, axis=0)
-            ).item()
+            next_barrier_value = agent.barrier_values(jnp.expand_dims(next_obs, axis=0)).item()
             
             next_barriers.append(next_barrier_value)
             

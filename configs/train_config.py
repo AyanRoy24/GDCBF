@@ -5,11 +5,11 @@ def get_config(config_string):
     base_real_config = dict(
         project='cbf3',
         seed=-1,
-        max_steps=100001,
+        max_steps=1000001,
         eval_episodes=20,
         batch_size=512, #Actor batch size x 2 (so really 1024), critic is fixed to 256
         log_interval=1000,
-        eval_interval=25_000,
+        eval_interval=250_000,
         normalize_returns=True,
     )
 
@@ -32,10 +32,10 @@ def get_config(config_string):
                     critic_hyperparam=0.7,
                     cost_critic_hyperparameter=0.01,
                     qh_penalty_scale=0.5,
-                    r_min=-0.001,
+                    r_min=-0.0,
                     R=0.6,
                     N=1,
-                    gamma=0.995,
+                    gamma=0.99,
                     actor_lr=3e-4,
                     critic_lr=3e-4,
                     value_lr=3e-4,

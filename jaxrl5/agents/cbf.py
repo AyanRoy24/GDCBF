@@ -254,6 +254,10 @@ class CBF(Agent):
         return np.array(action.squeeze()), self.replace(rng=new_rng)
 
     @jax.jit
+    def barrier_values(self, observations):
+        return self.safe_value.apply_fn({"params": self.safe_value.params},observations)
+
+    @jax.jit
     def eval_actions(self, observations: jnp.ndarray):
         rng = self.rng
         assert len(observations.shape) == 1
@@ -404,24 +408,11 @@ class CBF(Agent):
     @jax.jit
     def update(self, batch: DatasetDict):
         new_agent = self
-        batch_size = batch['observations'].shape[0]
-        mini_batch_size = min(256, batch_size)
-        
-        def mini_slice(x):
-            return x[:mini_batch_size]
-        
-        mini_batch = jax.tree_util.tree_map(mini_slice, batch)
-        
         # Combined safety critic updates (V_h and Q_h)
-        new_agent, h_info = new_agent.update_h(mini_batch)
+        new_agent, h_info = new_agent.update_h(batch)
         
         # Combined reward critic updates (V_r and Q_r)
-        new_agent, r_info = new_agent.update_r(mini_batch)
-        
-        # Actor updates
-        half_size = batch_size // 2
-        # first_batch = jax.tree_util.tree_map(lambda x: x[:half_size], batch)
-        # second_batch = jax.tree_util.tree_map(lambda x: x[half_size:], batch)
+        new_agent, r_info = new_agent.update_r(batch)
         
         # new_agent, _ = new_agent.update_actor(first_batch)
         new_agent, actor_info = new_agent.update_actor(batch)
