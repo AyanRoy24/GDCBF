@@ -29,8 +29,8 @@ def get_config(config_string):
                     mode=1,  # FISOR
                     reward_temperature=3.0,
                     cost_temperature=2.0,
-                    critic_hyperparam=0.95,
-                    cost_critic_hyperparameter=0.3,
+                    critic_hyperparam=0.7,
+                    cost_critic_hyperparameter=0.01,
                     qh_penalty_scale=0.5,
                     r_min=-0.001,
                     R=0.6,
