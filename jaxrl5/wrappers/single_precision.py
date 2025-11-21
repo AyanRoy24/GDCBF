@@ -1,10 +1,12 @@
 import copy
 
-import gymnasium as gym
-# import gym
+import gym
+from gym.spaces import Box, Dict
+
+# import gymnasium as gym
+# from gymnasium.spaces import Box, Dict
+
 import numpy as np
-from gymnasium.spaces import Box, Dict
-# from gym.spaces import Box, Dict
 
 
 def _convert_space(obs_space):

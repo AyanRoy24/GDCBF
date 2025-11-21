@@ -14,7 +14,7 @@ from env.point_robot import PointRobot
 from jaxrl5.agents import CBF
 
 FLAGS = flags.FLAGS
-flags.DEFINE_string('model_location', 'results/PointRobot/167/', 'model location for point robot model')
+flags.DEFINE_string('model_location', 'results/PointRobot/78/', 'model location for point robot model')
 
 def to_config_dict(d):
     if isinstance(d, dict):

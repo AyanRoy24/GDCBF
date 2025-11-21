@@ -4,8 +4,12 @@ import jax.numpy as jnp
 import flax
 import distrax
 
+# default_init = nn.initializers.xavier_uniform
 
-default_init = nn.initializers.xavier_uniform
+# default_init = nn.initializers.uniform
+
+def default_init(scale: float=2):
+    return nn.initializers.orthogonal(scale**0.5)
 
 def get_weight_decay_mask(params):
     flattened_params = flax.traverse_util.flatten_dict(
@@ -37,6 +41,7 @@ class MLP(nn.Module):
             if i + 1 == len(self.hidden_dims) and self.scale_final is not None:
                 x = nn.Dense(size, kernel_init=default_init(self.scale_final))(x)
             else:
+                # print(">>", x.dtype, type(x))
                 x = nn.Dense(size, kernel_init=default_init())(x)
             if self.use_layer_norm:
                 x = nn.LayerNorm()(x)
@@ -61,18 +66,25 @@ class GaussianPolicy(nn.Module):
         self, observations: jnp.ndarray, temperature: float = 1.0,
         # training: bool = False
     ) -> distrax.Distribution:
-        outputs = MLP(
-            self.hidden_dims,
-            activate_final=True,
-        )(observations)
+        # outputs = MLP(
+        #     self.hidden_dims,
+        #     activate_final=True,
+        # )(observations)
         # if self.droupout_rate > 0:
         #     outputs = nn.Dropout(rate=self.droupout_rate, deterministic=not training)(outputs)
+        dims_including_final = (*self.hidden_dims, self.action_dim * 2,)
+        means_and_logs = MLP(
+            hidden_dims=dims_including_final,
+            activate_final=False,
+        )(observations)
 
-        means = nn.Dense(
-            self.action_dim, kernel_init=default_init()
-        )(outputs)
-        log_stds = nn.Dense(self.action_dim, kernel_init=default_init())(outputs) #self.param("log_stds", nn.initializers.zeros, (self.action_dim,))
+        # means = nn.Dense(
+        #     self.action_dim, kernel_init=default_init()
+        # )(outputs)
+        # log_stds = nn.Dense(self.action_dim, kernel_init=default_init())(outputs) #self.param("log_stds", nn.initializers.zeros, (self.action_dim,))
+        means, log_stds = jnp.split(means_and_logs, 2, axis=-1)
         log_stds = jnp.clip(log_stds, self.log_std_min, self.log_std_max)
+
         if not self.tanh_squash_distribution:
             means = nn.tanh(means)
 
