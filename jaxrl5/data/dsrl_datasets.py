@@ -64,7 +64,7 @@ class DSRLDataset(Dataset):
         self.obs_std = dataset_dict["observations"].std(axis=0) 
         dataset_dict["observations"] = (dataset_dict["observations"] - self.obs_mean) / (self.obs_std)
         dataset_dict["next_observations"] = (dataset_dict["next_observations"] - self.obs_mean) / (self.obs_std)
-        print(f"Observation normalization: mean shape {self.obs_mean.shape}, std shape {self.obs_std.shape}")
+        # print(f"Observation normalization: mean shape {self.obs_mean.shape}, std shape {self.obs_std.shape}")
 
         dataset_dict["masks"] = 1.0 - dataset_dict['dones']
         del dataset_dict['dones']

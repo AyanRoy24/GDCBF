@@ -45,22 +45,16 @@ class CBF(Agent):
     safe_critic: TrainState
     safe_target_critic: TrainState
     safe_value: TrainState
-    # safe_target_value: TrainState
     discount: float
-    gamma: float
     tau: float
     actor_tau: float
     reward_tau: float
     cost_tau: float     
     action_dim: int = struct.field(pytree_node=False)
-    # N: int #How many samples per observation
     N : int = struct.field(pytree_node=False)
-    R: float = struct.field(pytree_node=False)  # for 'add' mode
     reward_temperature: float
-    cost_temperature: float 
     cost_ub: float
     r_min: float 
-    qh_penalty: float
     mode:int = struct.field(pytree_node=False)  # 1: 'fisor', 2: 'add', 3: 'reach'
 
     @classmethod
@@ -76,7 +70,6 @@ class CBF(Agent):
         critic_hidden_dims: Sequence[int] = (256, 256),
         actor_hidden_dims: Sequence[int] = (256, 256),
         discount: float = 0.99,
-        gamma: float = 0.5,
         tau: float = 0.005,
         reward_tau: float = 0.8,
         num_qs: int = 2,
@@ -84,14 +77,11 @@ class CBF(Agent):
         value_layer_norm: bool = False,
         critic_layer_norm: bool = True,
         reward_temperature: float = 3.0,
-        cost_temperature: float = 3.0,
         cost_ub: float = 150.0,
         N: int = 64,
-        R: float = 0.5,  # for 'add' mode
         decay_steps: Optional[int] = int(2e6),
         cost_tau: float = 0.2,
         r_min: float = -1.0,
-        qh_penalty: float = 0.0,
         mode: int = 1,  # 1: 'fisor', 2: 'add', 3: 'reach'
         actor_tau: float = 0.001,
         cost_limit: float = 10,
@@ -182,21 +172,16 @@ class CBF(Agent):
             safe_critic=safe_critic,
             safe_target_critic=safe_target_critic,
             safe_value=safe_value,
-            # safe_target_value=safe_target_value,
             tau=tau,
             discount=discount,
-            gamma=gamma,
             rng=rng,
             action_dim=action_dim,
             N=N,
-            R=R,
             reward_tau=reward_tau,
             reward_temperature=reward_temperature,
-            cost_temperature=cost_temperature,
             cost_tau=cost_tau,
             cost_ub=cost_ub,
             r_min=r_min,
-            qh_penalty=qh_penalty,
             mode=mode,
             actor_tau=actor_tau,
         )
@@ -219,28 +204,11 @@ class CBF(Agent):
             batch["actions"],
         )
 
-        qc = qcs.max(axis=0)
-
-        vc = agent.safe_value.apply_fn(
-                {"params": agent.safe_value.params}, batch["observations"]
-            )
-
-        # unsafe_condition = jnp.where( vc >  0. - eps, 1, 0)
-        # safe_condition = jnp.where(vc <= 0. - eps, 1, 0) * jnp.where(qc<=0. - eps, 1, 0)
-        
-        # cost_exp_adv = jnp.exp((vc-qc) * agent.cost_temperature)
-        # reward_exp_adv = jnp.exp((q - v) * agent.reward_temperature)
-        
-        # unsafe_weights = unsafe_condition * jnp.clip(cost_exp_adv, 0, agent.cost_ub) ## ignore vc >0, qc>vc
-        # safe_weights = safe_condition * jnp.clip(reward_exp_adv, 0, 100)        # Reward-based weights for safe states
         
         reward_adv = q - v
-        cost_adv = vc - qc
         reward_weights = jnp.exp(reward_adv * agent.reward_temperature)
         reward_weights = jnp.clip(reward_weights, 0, 100)
-        cost_weights = jnp.exp(cost_adv * agent.cost_temperature)
-        cost_weights = jnp.clip(cost_weights, 0, agent.cost_ub)
-        weights = reward_weights#+ cost_weights
+        weights = reward_weights 
     
 
         def actor_loss_fn(actor_params: FrozenDict[str, Any]):
@@ -269,7 +237,7 @@ class CBF(Agent):
         the logic for enhancing safety by sampling N action candidates from the diffusion policy and selecting the safest one (with the lowest Q*_h value)
         '''
         # observations = jax.device_put(observations)
-        observations_batch = jnp.expand_dims(observations, axis=0)#.repeat(self.N, axis=0)
+        observations_batch = jnp.expand_dims(observations, axis=0).repeat(self.N, axis=0)
         # we sample N action candidates and select the safest one (i.e., the lowest Q*_h value) as the final output
 
         # Sample actions from the learned Gaussian policy
@@ -284,8 +252,8 @@ class CBF(Agent):
         qcs = compute_safe_q(self.safe_target_critic.apply_fn, self.safe_target_critic.params, observations_batch, actions)
         # select the safest one (i.e., the lowest Q*_h value) as the final output
         idx = jnp.argmin(qcs)        
-        # action = actions[idx]
-        action = actions[0]
+        action = actions[idx]
+        # action = actions[0]
         new_rng = rng
         # return np.array(action.squeeze()), self.replace(rng=new_rng)
         return action.squeeze(), self.replace(rng=new_rng)
@@ -323,7 +291,8 @@ class CBF(Agent):
         safe_mask = (qh_min <= 0)  # Q_h(s,a) ≤ 0
         unsafe_mask = (qh_min > 0)  # Q_h(s,a) > 0
         safe_target = batch["rewards"] + agent.discount * batch["masks"] * next_vr
-        unsafe_target = agent.r_min / (1 - agent.discount) - qh_min * agent.qh_penalty
+        unsafe_target = agent.r_min / (1 - agent.discount) - qh_min# * agent.qh_penalty
+        # unsafe_target = - qh_min 
         target_q = safe_mask * safe_target + unsafe_mask * unsafe_target
         
         def Qr_loss(critic_params) -> Tuple[jnp.ndarray, Dict[str, float]]:
@@ -355,7 +324,6 @@ class CBF(Agent):
     def update_h(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
         """Combined safety critic and value function update."""
         
-        # Step 1: Update V_h (Equation 5)
         qcs = agent.safe_target_critic.apply_fn(
             {"params": agent.safe_target_critic.params},
             batch["observations"], batch["actions"]
@@ -369,28 +337,34 @@ class CBF(Agent):
         
         vh_grads, vh_info = jax.grad(Vh_loss, has_aux=True)(agent.safe_value.params)
         safe_value = agent.safe_value.apply_gradients(grads=vh_grads)
-        
-        # Step 2: Update Q_h (Equation 6/7 depending on mode)
+
         next_vh = safe_value.apply_fn(
             {"params": safe_value.params}, batch["next_observations"]
         )
         
         h_sa = batch["costs"]
-        target_qh1 = (1 - agent.gamma) * h_sa + agent.gamma * jnp.maximum(h_sa, next_vh)
-        target_qh2 = h_sa + agent.gamma * next_vh - (1 - agent.gamma) * agent.R
-        target_qh3 = jnp.maximum(h_sa, next_vh)
+        
         if agent.mode == 1:  # FISOR
-            target_qh = target_qh1
+            target_qh = (1 - agent.discount) * h_sa + agent.discount * jnp.maximum(h_sa, next_vh)
         elif agent.mode == 2:  # Value-as-Barrier (Additive Bellman)
-            target_qh = target_qh2
+            target_qh = h_sa + agent.discount * next_vh - (1 - agent.discount) * 0.6
         elif agent.mode == 3:  # Reachability Constrained RL
-            target_qh = target_qh3
+            target_qh = jnp.maximum(h_sa, next_vh)
         elif agent.mode == 4:  # Modified Reachability Constrained RL -- AND
+            target_qh1 = (1 - agent.discount) * h_sa + agent.discount * jnp.maximum(h_sa, next_vh)
+            target_qh2 = h_sa + agent.discount * next_vh - (1 - agent.discount) * 0.6
+            target_qh3 = jnp.maximum(h_sa, next_vh)
             target_qh = min(target_qh1, target_qh2 , target_qh3)
         elif agent.mode == 5:  # Safe RL via Min-QC -- OR
+            target_qh1 = (1 - agent.discount) * h_sa + agent.discount * jnp.maximum(h_sa, next_vh)
+            target_qh2 = h_sa + agent.discount * next_vh - (1 - agent.discount) * 0.6
+            target_qh3 = jnp.maximum(h_sa, next_vh)
             target_qh = max(target_qh1, target_qh2, target_qh3) 
         elif agent.mode == 6:  # randomly pick any 2 of 3, then randomly choose min or max
             # Use agent RNG to stay functional under JIT
+            target_qh1 = (1 - agent.discount) * h_sa + agent.discount * jnp.maximum(h_sa, next_vh)
+            target_qh2 = h_sa + agent.discount * next_vh - (1 - agent.discount) * 0.6
+            target_qh3 = jnp.maximum(h_sa, next_vh)
             rng, key_pair, key_op = jax.random.split(agent.rng, 3)
             targets = jnp.stack([target_qh1, target_qh2, target_qh3], axis=0)  
             idx_pair = jax.random.choice(key_pair, 3, shape=(2,), replace=False)  # two distinct indices
@@ -407,17 +381,9 @@ class CBF(Agent):
                 {"params": safe_critic_params},
                 batch["observations"], batch["actions"]
             )
-            # qh_loss = ((qhs - target_qh) ** 2).mean()
             # TD
             qh_loss = jnp.abs(qhs - target_qh).mean()
 
-            def huber_loss(diff, delta=1.0):
-                abs_diff = jnp.abs(diff)
-                quadratic = jnp.minimum(abs_diff, delta)
-                linear = abs_diff - quadratic
-                return 0.5 * quadratic ** 2 + delta * linear
-
-            # qh_loss = huber_loss(qhs - target_qh).mean()
             return qh_loss, {"qh_loss": qh_loss, "q_h": qhs.mean()}
         
         qh_grads, qh_info = jax.grad(Qh_loss, has_aux=True)(agent.safe_critic.params)

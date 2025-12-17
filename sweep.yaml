@@ -1,31 +1,50 @@
-program: launcher/examples/train_offline.py
-method: bayes
-project: 081125_38
+program: launcher/examples/train_md.py
+method: random
+project: 281125
 
 metric:
   goal: minimize
-  name: cost
+  name: n_cost
 
 parameters:
+  cost_scale:
+    distribution: categorical
+    values: [5, 10, 15, 20, 25]
+  # cbf_lr:
+  #   distribution: categorical
+  #   values: [0.03, 0.003, 0.0003]
+  # critic_lr:
+  #   distribution: categorical
+  #   values: [0.0003, 0.003, 0.03]
+  # reward_temperature:
+  #   distribution: categorical
+  #   values: [0.3, 0.4, 0.5]
+  # actor_weight_decay:
+  #   distribution: categorical
+  #   values: [0.0001, "None", 0.001]
+  # value_layer_norm:
+  #   distribution: categorical
+  #   values: [True, False]
   cost_tau:
-    distribution: uniform
-    min: 0.1
-    max: 0.5
-  reward_tau:
-    distribution: uniform
-    min: 0.6
-    max: 0.99
+    distribution: categorical
+    values: [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45]
+  # reward_tau:
+  #   distribution: categorical
+  #   values: [0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9]
+  # r_min:
+  #   distribution: categorical
+  #   values: [-0.1, -0.01, -0.001]
   
 command:
   - python
   - launcher/examples/train_md.py
   - --env_id
-  - 38
+  - 32
   - --config
   - configs/train_config.py:r
   - --mode
   - 1
   - --project
-  - '081125_38'
+  - 281125
   - --max_steps
   - 500001

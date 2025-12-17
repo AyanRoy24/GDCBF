@@ -66,7 +66,7 @@ def call_main(details, env_id):
     ds.seed(details["seed"])
     obs_mean = ds.obs_mean
     obs_std = ds.obs_std
-    print('Dataset obs mean:', obs_mean, 'obs std:', obs_std)
+    # print('Dataset obs mean:', obs_mean, 'obs std:', obs_std)
     config_dict = dict(details['agent_kwargs'])
     model_cls = config_dict.pop("model_cls") 
     config_dict.pop("cost_scale") 
@@ -75,54 +75,59 @@ def call_main(details, env_id):
     )
     save_time, eval_num = 1, 1
     avg_n_r, avg_n_c = [], []
+    eval_steps = int(details['max_steps'] - 5)
     for i in trange(details['max_steps'], smoothing=0.1, desc=details['experiment_name']):
         sample = ds.sample_jax(details['batch_size'])     
         agent, info = agent.update(sample)
         if i % details['log_interval'] == 0:
             wandb.log({f"train/{k}": v for k, v in info.items()}, step=i)
-        if i % details['eval_interval'] == 0:
-        # if i >= (details['max_steps'] - 20):
-            # agent.save(f"./results/{details['env_name']}/{details['seed']}", save_time)
+        # if i == 500000 : #details['max_steps']:
+        #     agent.save(f"./results/{details['env_name']}/{details['seed']}", save_time)
             # save_time += 1
-            offline_eval_info = offline_evaluation(agent, ds, num_samples=100000, alpha=0.1, seed=details['seed'])
-            if details['env_name'] == 'PointRobot':
-                eval_info = evaluate_pr(agent, env, details['eval_episodes'])
-            else:
-                if FLAGS.env_id >= 30:
-                    eval_info = evaluate_md(obs_mean, obs_std, details['seed'], env_id, eval_num, agent, env, details['eval_episodes'], render=False) #, save_video=True, )
-                    # eval_info = evaluate(agent, env, details['eval_episodes'], save_video=True, render=True)
-                    eval_num += 1
-                else:
-                    eval_info = evaluate(details['seed'], agent, env, details['eval_episodes']) #, details['agent_kwargs']['cost_limit'])
-
-            eval_info.update({f"{k}": v for k, v in offline_eval_info.items()})
-            # if eval_info["cost"] == 0:
-            #     rand_frac = round(random.uniform(0.1, 0.9), 3)
-            #     eval_info["cost"] += details['cost_limit'] * rand_frac
-            if details['env_name'] != 'PointRobot':
-                eval_info["n_return"], eval_info["n_cost"] = env.get_normalized_score(eval_info["return"], eval_info["cost"])
-                # compute variance including the current eval
-                # arr_r = np.array(avg_n_r + [eval_info["n_return"]], dtype=float)
-                arr_r = np.array([eval_info["n_return"]], dtype=float)
-                # arr_c = np.array(avg_n_c + [eval_info["n_cost"]], dtype=float)
-                arr_c = np.array([eval_info["n_cost"]], dtype=float)
-                eval_info["var_n_return"] = float(np.var(arr_r))
-                eval_info["var_n_cost"] = float(np.var(arr_c))
-                avg_n_r.append(eval_info["n_return"])
-                avg_n_c.append(eval_info["n_cost"])
-                avg_return = sum(avg_n_r)/len(avg_n_r)
-                avg_cost = sum(avg_n_c)/len(avg_n_c)
-                eval_info["avg_n_return"] = avg_return
-                eval_info["avg_n_cost"] = avg_cost
-                eval_info['best_n_return'] = max(avg_n_r)
-                eval_info['best_n_cost'] = min(avg_n_c)
+        # if (i+1) % details['eval_interval'] == 0:        
+        # if i != eval_steps and i >= (eval_steps- 20):            
+        # if i >= (eval_steps):
             
-            print ({f"eval/{k}": v for k, v in eval_info.items()})
-            wandb.log({f"{k}": v for k, v in eval_info.items()}, step=i)        
-    cost = eval_info["cost"]
-    ret = eval_info["return"]
-    wandb.run.summary["cost"] = cost
-    wandb.run.summary["return"] = ret
+            # offline_eval_info = offline_evaluation(agent, ds, num_samples=100000, alpha=0.1, seed=details['seed'])
+    if details['env_name'] == 'PointRobot':
+        eval_info = evaluate_pr(agent, env, details['eval_episodes'])
+    elif FLAGS.env_id >= 30:
+        eval_info = evaluate_md(obs_mean, obs_std, details['seed'], env_id, eval_num, agent, env, details['eval_episodes'], render=False) #, save_video=True, )
+            # eval_num += 1        
+            # eval_info = evaluate(agent, env, details['eval_episodes'], save_video=True, render=True)
+    else:
+        eval_info = evaluate(details['seed'], agent, env, details['eval_episodes']) #, details['agent_kwargs']['cost_limit'])
+
+    # eval_info.update({f"{k}": v for k, v in offline_eval_info.items()})
+    # if eval_info["cost"] == 0:
+    #     rand_frac = round(random.uniform(0.1, 0.9), 3)
+    #     eval_info["cost"] += details['cost_limit'] * rand_frac
+    if details['env_name'] != 'PointRobot':
+        eval_info["n_return"], eval_info["n_cost"] = env.get_normalized_score(eval_info["return"], eval_info["cost"])
+        # compute variance including the current eval
+        # arr_r = np.array(avg_n_r + [eval_info["n_return"]], dtype=float)
+        arr_r = np.array([eval_info["n_return"]], dtype=float)
+        # arr_c = np.array(avg_n_c + [eval_info["n_cost"]], dtype=float)
+        arr_c = np.array([eval_info["n_cost"]], dtype=float)
+        # eval_info["var_n_return"] = float(np.var(arr_r))
+        # eval_info["var_n_cost"] = float(np.var(arr_c))
+        
+        # avg_n_r.append(eval_info["n_return"])
+        # avg_n_c.append(eval_info["n_cost"])
+        # avg_return = sum(avg_n_r)/len(avg_n_r)
+        # avg_cost = sum(avg_n_c)/len(avg_n_c)
+        
+        # eval_info["avg_n_return"] = avg_return
+        # eval_info["avg_n_cost"] = avg_cost
+        # eval_info['best_n_return'] = max(avg_n_r)
+        # eval_info['best_n_cost'] = min(avg_n_c)
+    
+    # print ({f"eval/{k}": v for k, v in eval_info.items()})
+    wandb.log({f"{k}": v for k, v in eval_info.items()})# , step=i)        
+    # cost = eval_info["cost"]
+    # ret = eval_info["return"]
+    # wandb.run.summary["cost"] = cost
+    # wandb.run.summary["return"] = ret
 
 def main(_):
     parameters = FLAGS.config

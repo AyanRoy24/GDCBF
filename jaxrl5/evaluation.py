@@ -147,10 +147,10 @@ def evaluate_md(obs_mean, obs_std, seed, env_id,  eval_num, agent, env: gym.Env,
     # for _ in trange(num_episodes, desc="Evaluating", leave=False):
     for ep_idx in trange(num_episodes, desc="Evaluating", leave=False):
         obs, info = env.reset()
-        print('Initial obs:', obs)
+        # print('Initial obs:', obs)
         if obs_mean is not None and obs_std is not None:
             obs = (obs - obs_mean) / (obs_std)
-        print('Normalized initial obs:', obs)
+        # print('Normalized initial obs:', obs)
         episode_ret, episode_cost, episode_len = 0.0, 0.0, 0
 
         # collect frames for this episode
@@ -203,20 +203,23 @@ def evaluate_md(obs_mean, obs_std, seed, env_id,  eval_num, agent, env: gym.Env,
             action, agent = agent.eval_actions(obs)
             # action = np.array(action)            
 
-            barrier_value = agent.barrier_values(jnp.expand_dims(obs, axis=0)).item()
-            barriers.append(barrier_value)
-            print('barrier_value:', barrier_value)
+            # barrier_value = agent.barrier_values(jnp.expand_dims(obs, axis=0)).item()
+            # barrier_fn = jax.jit(agent.barrier_values)
+            # barrier_value = float(barrier_fn(jnp.expand_dims(obs, axis=0)))
+            # barriers.append(barrier_value)
+            # print('barrier_value:', barrier_value)
             next_obs, reward, terminated, truncated, info = env.step(action)
             if obs_mean is not None and obs_std is not None:
                 next_obs_norm = (next_obs - obs_mean) / (obs_std)
             else:
                 next_obs_norm = next_obs
-            print('next_obs_norm:', next_obs_norm, 'next_obs:', next_obs)
+            # print('next_obs_norm:', next_obs_norm, 'next_obs:', next_obs)
             
-            next_barrier_value = agent.barrier_values(jnp.expand_dims(next_obs, axis=0)).item()
-
-            next_barriers.append(next_barrier_value)
-            print('next_barrier_value:', next_barrier_value)
+            # next_barrier_value = agent.barrier_values(jnp.expand_dims(next_obs, axis=0)).item()
+            # next_barrier_fn = jax.jit(agent.barrier_values)
+            # next_barrier_value = float(next_barrier_fn(jnp.expand_dims(next_obs, axis=0)))
+            # next_barriers.append(next_barrier_value)
+            # print('next_barrier_value:', next_barrier_value)
             cost = info["cost"]
             episode_ret += reward
             episode_len += 1
@@ -239,13 +242,16 @@ def evaluate_md(obs_mean, obs_std, seed, env_id,  eval_num, agent, env: gym.Env,
         if len(frames) > 0:
             frames_all.extend(frames)
         
-    barriers = jnp.array(barriers)
-    next_barriers = jnp.array(next_barriers)
+    # barriers = jnp.array(barriers)
+    # next_barriers = jnp.array(next_barriers)
     # eval_num += 1
-    validity = check_valid(barriers, next_barriers, alpha=0.9)
-    
-    coverage = check_coverage(barriers, threshold=0.0)
+    # validity = check_valid(barriers, next_barriers, alpha=0.9)
+    # coverage = check_coverage(barriers, threshold=0.0)
+    # validity_fn = jax.jit(check_valid)
+    # validity = validity_fn(barriers, next_barriers, alpha=0.9)
 
+    # coverage_fn = jax.jit(check_coverage)
+    # coverage = coverage_fn(barriers, threshold=0.0)
     # if save_video and len(frames_all) > 0:
     if len(frames_all) > 0:
         try:
@@ -277,8 +283,8 @@ def evaluate_md(obs_mean, obs_std, seed, env_id,  eval_num, agent, env: gym.Env,
         "return": np.mean(episode_rets),
         "cost": np.mean(episode_costs),
         "episode_len": np.mean(episode_lens),
-        "coverage": coverage,
-        "validity": validity,
+        # "coverage": coverage,
+        # "validity": validity,
     }
 
 def evaluate(agent, env: gym.Env, num_episodes: int, save_video: bool = False, render: bool = False) -> Dict[str, float]:
