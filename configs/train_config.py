@@ -3,13 +3,14 @@ import numpy as np
 
 def get_config(config_string):
     base_real_config = dict(
-        project='cbf',
+        project='231225',
+        # env_id=38,
         seed=-1,
-        max_steps=1_000_001,
+        max_steps=500_001,
         eval_episodes=20,
         batch_size=512, #Actor batch size x 2 (so really 1024), critic is fixed to 256
         log_interval=1_000,
-        eval_interval=250_000,
+        # eval_interval=250_000,
         normalize_returns=True,
     )
 
@@ -17,7 +18,9 @@ def get_config(config_string):
         base_real_config["seed"] = np.random.randint(1000)
 
     base_data_config = dict(
-        cost_scale=1,
+        cost_scale=25.0,
+        # env_id =38,
+        # seed=0,
         pr_data='jaxrl5/data/point_robot-expert-random-100k.hdf5', # The location of point_robot data
     )
 
@@ -42,7 +45,7 @@ def get_config(config_string):
                     decay_steps=int(3e6),
                     value_layer_norm=False,
                     actor_tau=0.001,
-                    reward_tau=0.7,
+                    reward_tau=0.75,
                     cost_tau=0.15,
                     cost_ub=150,
                     r_min=-0.001,

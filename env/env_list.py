@@ -23,14 +23,14 @@ env_list = [# safety_gymnasium: car
             'OfflineSwimmerVelocityGymnasium-v1',      # 19
             'OfflineWalker2dVelocityGymnasium-v1',     # 20
             # bullet_safety_gym
-            "OfflineCarCircle-v0",                     # 21
+            "OfflineAntCircle-v0",                     # 21
             "OfflineAntRun-v0",                        # 22
-            "OfflineDroneRun-v0",                      # 23
-            "OfflineDroneCircle-v0",                   # 24
-            "OfflineCarRun-v0",                        # 25
-            "OfflineAntCircle-v0",                     # 26
-            "OfflineBallCircle-v0",                    # 27
-            "OfflineBallRun-v0",                       # 28
+            "OfflineBallCircle-v0",                    # 23
+            "OfflineBallRun-v0",                       # 24
+            "OfflineCarCircle-v0",                     # 25
+            "OfflineCarRun-v0",                        # 26
+            "OfflineDroneCircle-v0",                   # 27
+            "OfflineDroneRun-v0",                      # 28
             # point_robot
             "PointRobot",                              # 29
             # metadrive

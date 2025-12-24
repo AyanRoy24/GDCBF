@@ -1,50 +1,71 @@
 program: launcher/examples/train_md.py
-method: random
-project: 281125
+method: grid
+project: "231225"
 
 metric:
   goal: minimize
   name: n_cost
 
 parameters:
-  cost_scale:
-    distribution: categorical
-    values: [5, 10, 15, 20, 25]
-  # cbf_lr:
-  #   distribution: categorical
-  #   values: [0.03, 0.003, 0.0003]
-  # critic_lr:
-  #   distribution: categorical
-  #   values: [0.0003, 0.003, 0.03]
-  # reward_temperature:
-  #   distribution: categorical
-  #   values: [0.3, 0.4, 0.5]
-  # actor_weight_decay:
-  #   distribution: categorical
-  #   values: [0.0001, "None", 0.001]
-  # value_layer_norm:
-  #   distribution: categorical
-  #   values: [True, False]
-  cost_tau:
-    distribution: categorical
-    values: [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45]
-  # reward_tau:
-  #   distribution: categorical
-  #   values: [0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9]
-  # r_min:
-  #   distribution: categorical
-  #   values: [-0.1, -0.01, -0.001]
-  
+  agent_kwargs.model_cls:
+    values: ["CBF"]
+  agent_kwargs.mode:
+    values: [1]
+  agent_kwargs.cost_limit:
+    values: [5, 10]
+  agent_kwargs.actor_lr:
+    values: [0.0003, 0.003]
+  agent_kwargs.critic_lr:
+    values: [0.0003, 0.003]
+  agent_kwargs.value_lr:
+    values: [0.0003, 0.003]
+  agent_kwargs.cbf_lr:
+    values: [0.0003, 0.003]
+  agent_kwargs.reward_temperature:
+    values: [3.0, 1.0]
+  agent_kwargs.actor_weight_decay:
+    values: [null, 0.0001, 0.001]
+  agent_kwargs.decay_steps:
+    values: [3000000]
+  agent_kwargs.value_layer_norm:
+    values: [false, true]
+  agent_kwargs.actor_tau:
+    values: [0.001, 0.01]
+  agent_kwargs.reward_tau:
+    values: [0.6, 0.75, 0.9]
+  agent_kwargs.cost_tau:
+    values: [0.1, 0.15, 0.2]
+  agent_kwargs.cost_ub:
+    values: [150]
+  agent_kwargs.r_min:
+    values: [-0.001, -0.01]
+  agent_kwargs.N:
+    values: [16, 32]
+  agent_kwargs.discount:
+    values: [0.99, 0.95]
+
+  dataset_kwargs.cost_scale:
+    values: [5.0, 10.0, 25.0]
+  dataset_kwargs.env_id:
+    values: [30, 31, 32, 33, 34, 35, 36, 37, 38]
+  dataset_kwargs.seed:
+    values: [0, 1, 2]
+  dataset_kwargs.pr_data:
+    values: ["jaxrl5/data/point_robot-expert-random-100k.hdf5"]
+
+  max_steps:
+    values: [500001]
+  eval_episodes:
+    values: [20]
+  batch_size:
+    values: [512]
+  log_interval:
+    values: [1000]
+  normalize_returns:
+    values: [true, false]
+
 command:
   - python
   - launcher/examples/train_md.py
-  - --env_id
-  - 32
   - --config
   - configs/train_config.py:r
-  - --mode
-  - 1
-  - --project
-  - 281125
-  - --max_steps
-  - 500001

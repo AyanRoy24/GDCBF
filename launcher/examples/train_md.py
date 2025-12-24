@@ -20,7 +20,7 @@ from env.point_robot import PointRobot
 from jaxrl5.wrappers import wrap_gym
 from jaxrl5.agents import CBF 
 from jaxrl5.data.dsrl_datasets import DSRLDataset
-from jaxrl5.evaluation import evaluate, evaluate_md, evaluate_pr, offline_evaluation#, plot_cbf_cost_vs_safe_value, calculate_coverage
+from jaxrl5.evaluation import evaluate, evaluate_md, evaluate_pr #, offline_evaluation , plot_cbf_cost_vs_safe_value, calculate_coverage
 import json
 
 FLAGS = flags.FLAGS
@@ -35,7 +35,7 @@ flags.DEFINE_string('project', '081125', 'Name of the experiment')
 config_flags.DEFINE_config_file(
     "config",
     None,
-    "File path to the training hyperparameter configuration.",
+    # "configs/train_config.py",
     lock_config=False,
 )
 
@@ -47,8 +47,10 @@ def to_dict(config):
 
 def call_main(details, env_id):
     details['agent_kwargs']['cost_scale'] = details['dataset_kwargs']['cost_scale']
+    print('Training with config:', details)
     config_for_wandb = to_dict(details['agent_kwargs'])
     wandb.init(project=details['project'], name=details['experiment_name'], group=details['group'], config=config_for_wandb)
+    # wandb.init( name=details['experiment_name'], group=details['group'], config=config_for_wandb)
     # details['agent_kwargs']['mode'] = wandb.config.mode
     if details['env_name'] == 'PointRobot':
         assert details['dataset_kwargs']['pr_data'] is not None, "No data for Point Robot"
@@ -59,10 +61,11 @@ def call_main(details, env_id):
     else:
         env = gym.make(details['env_name']) #,use_render=True)
         # ds = DSRLDataset(env, critic_type=details['agent_kwargs']['critic_type'], cost_scale=details['dataset_kwargs']['cost_scale'], ratio=details['ratio'])
-        ds = DSRLDataset(env, cost_scale=details['dataset_kwargs']['cost_scale'], ratio=details['ratio'])
+        ds = DSRLDataset(env, cost_scale=details['dataset_kwargs']['cost_scale'])#, ratio=details['ratio'])
         env_max_steps = env._max_episode_steps
         env = wrap_gym(env, cost_limit=details['agent_kwargs']['cost_limit'])
         ds.normalize_returns(env.max_episode_reward, env.min_episode_reward, env_max_steps)
+    # ds.seed(details['dataset_kwargs']["seed"])
     ds.seed(details["seed"])
     obs_mean = ds.obs_mean
     obs_std = ds.obs_std
@@ -74,101 +77,48 @@ def call_main(details, env_id):
         details['seed'], env.observation_space, env.action_space, **config_dict
     )
     save_time, eval_num = 1, 1
-    avg_n_r, avg_n_c = [], []
-    eval_steps = int(details['max_steps'] - 5)
     for i in trange(details['max_steps'], smoothing=0.1, desc=details['experiment_name']):
         sample = ds.sample_jax(details['batch_size'])     
         agent, info = agent.update(sample)
         if i % details['log_interval'] == 0:
             wandb.log({f"train/{k}": v for k, v in info.items()}, step=i)
-        # if i == 500000 : #details['max_steps']:
-        #     agent.save(f"./results/{details['env_name']}/{details['seed']}", save_time)
-            # save_time += 1
-        # if (i+1) % details['eval_interval'] == 0:        
-        # if i != eval_steps and i >= (eval_steps- 20):            
-        # if i >= (eval_steps):
-            
-            # offline_eval_info = offline_evaluation(agent, ds, num_samples=100000, alpha=0.1, seed=details['seed'])
     if details['env_name'] == 'PointRobot':
         eval_info = evaluate_pr(agent, env, details['eval_episodes'])
-    elif FLAGS.env_id >= 30:
+    elif env_id >= 30:
         eval_info = evaluate_md(obs_mean, obs_std, details['seed'], env_id, eval_num, agent, env, details['eval_episodes'], render=False) #, save_video=True, )
             # eval_num += 1        
             # eval_info = evaluate(agent, env, details['eval_episodes'], save_video=True, render=True)
     else:
         eval_info = evaluate(details['seed'], agent, env, details['eval_episodes']) #, details['agent_kwargs']['cost_limit'])
 
-    # eval_info.update({f"{k}": v for k, v in offline_eval_info.items()})
-    # if eval_info["cost"] == 0:
-    #     rand_frac = round(random.uniform(0.1, 0.9), 3)
-    #     eval_info["cost"] += details['cost_limit'] * rand_frac
     if details['env_name'] != 'PointRobot':
         eval_info["n_return"], eval_info["n_cost"] = env.get_normalized_score(eval_info["return"], eval_info["cost"])
-        # compute variance including the current eval
-        # arr_r = np.array(avg_n_r + [eval_info["n_return"]], dtype=float)
-        arr_r = np.array([eval_info["n_return"]], dtype=float)
-        # arr_c = np.array(avg_n_c + [eval_info["n_cost"]], dtype=float)
-        arr_c = np.array([eval_info["n_cost"]], dtype=float)
-        # eval_info["var_n_return"] = float(np.var(arr_r))
-        # eval_info["var_n_cost"] = float(np.var(arr_c))
-        
-        # avg_n_r.append(eval_info["n_return"])
-        # avg_n_c.append(eval_info["n_cost"])
-        # avg_return = sum(avg_n_r)/len(avg_n_r)
-        # avg_cost = sum(avg_n_c)/len(avg_n_c)
-        
-        # eval_info["avg_n_return"] = avg_return
-        # eval_info["avg_n_cost"] = avg_cost
-        # eval_info['best_n_return'] = max(avg_n_r)
-        # eval_info['best_n_cost'] = min(avg_n_c)
     
-    # print ({f"eval/{k}": v for k, v in eval_info.items()})
+    print ({f"eval/{k}": v for k, v in eval_info.items()})
     wandb.log({f"{k}": v for k, v in eval_info.items()})# , step=i)        
-    # cost = eval_info["cost"]
-    # ret = eval_info["return"]
-    # wandb.run.summary["cost"] = cost
-    # wandb.run.summary["return"] = ret
+
 
 def main(_):
     parameters = FLAGS.config
-    # config_string = str(FLAGS.config).split(':')[-1] if ':' in str(FLAGS.config) else None
-    # print('Config string:', config_string)
     env_id = FLAGS.env_id
-    parameters['env_name'] = env_list[FLAGS.env_id]
-    parameters['mode'] = FLAGS.mode
-    parameters['project'] = FLAGS.project
-    parameters['max_steps'] = FLAGS.max_steps
-    # parameters['eval_interval'] = FLAGS.eval
-    parameters['ratio'] = FLAGS.ratio
+    # mode = FLAGS.mode
+    parameters['env_name'] = env_list[env_id]    
     parameters['group'] = parameters['env_name']
-    if FLAGS.mode == 1 : algo = 'fisor'
-    elif FLAGS.mode == 2: algo = 'value'
-    elif FLAGS.mode == 3: algo = 'RCRL'
-    elif FLAGS.mode == 4: algo = 'min'
-    elif FLAGS.mode == 5: algo = 'max'
-    elif FLAGS.mode == 6: algo = 'random'
-    else: raise ValueError('Wrong mode')
-    parameters['experiment_name'] = str(FLAGS.env_id) + '_' + algo + '_' + str(parameters['env_name']) + '_' + str(parameters['seed']) #str(np.random.randint(1000))
-    if parameters['env_name'] == 'PointRobot':
-        parameters['max_steps'] = 100001
-        parameters['batch_size'] = 1024
-        parameters['eval_interval'] = 25000
-        # parameters['eval_episodes'] = 2
-        parameters['agent_kwargs']['cost_temperature'] = 2
-        parameters['agent_kwargs']['reward_temperature'] = 5
-        # parameters['agent_kwargs']['cost_tau'] = 0.01
-        parameters['agent_kwargs']['cost_ub'] = 150
-        parameters['agent_kwargs']['N'] = 8
-    elif FLAGS.env_id >= 21:  # Bullet safety gym envs
+    # parameters['experiment_name'] = str(env_id) + '_'  + str(parameters['env_name']) + '_' + str(parameters['dataset_kwargs']['seed']) #str(np.random.randint(1000))
+    parameters['experiment_name'] = str(env_id) + '_'  + str(parameters['env_name']) + '_' + str(parameters['seed']) #str(np.random.randint(1000))
+    
+    if env_id >= 21:  # Bullet safety gym envs
         parameters['agent_kwargs']['cost_limit'] = 5
-    print(parameters)
+    
+    # print(parameters)
 
     # if not os.path.exists(f"./results/{parameters['env_name']}/{parameters['seed']}"):
     #     os.makedirs(f"./results/{parameters['env_name']}/{parameters['seed']}")
     # with open(f"./results/{parameters['env_name']}/{parameters['seed']}/config.json", "w") as f:
     #     json.dump(to_dict(parameters), f, indent=4)
     
-    call_main(parameters,env_id)
+    # call_main(parameters, parameters['dataset_kwargs']['env_id'])
+    call_main(parameters, env_id)
 
 if __name__ == '__main__':
     app.run(main)
