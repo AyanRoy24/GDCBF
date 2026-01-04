@@ -14,85 +14,6 @@ import time
 from jaxrl5.data.dsrl_datasets import DSRLDataset
 from tqdm.auto import trange  # noqa
 import matplotlib.pyplot as plt
-import jax
-import jax.numpy as jnp
-# from flax import linen as nn
-import torch
-import torch.nn as nn
-
-class EgoNavMLP(nn.Module):
-    def __init__(self, input_dim, output_dim=32):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, output_dim),
-            nn.ReLU()
-        )
-    def forward(self, x):
-        return self.net(torch.tensor(x, dtype=torch.float32))
-
-class LidarCNN(nn.Module):
-    def __init__(self, input_dim=240, output_dim=32):
-        super().__init__()
-        self.conv = nn.Conv1d(1, 8, kernel_size=5, stride=1, padding=2)
-        self.relu = nn.ReLU()
-        self.flatten = nn.Flatten()
-        self.fc = nn.Linear(input_dim * 8, output_dim)
-    def forward(self, x):
-        x = torch.tensor(x, dtype=torch.float32).unsqueeze(0).unsqueeze(0)  # shape (1, 1, 240)
-        x = self.conv(x)
-        x = self.relu(x)
-        x = self.flatten(x)
-        x = self.fc(x)
-        x = self.relu(x)
-        return x.squeeze(0)  # shape (output_dim,)
-
-def encode_observation(obs, ego_nav_encoder, lidar_encoder, ego_nav_mean, ego_nav_std, lidar_mean, lidar_std):
-    N_ego_nav = 19
-    N_lidar = 240
-    obs = np.array(obs)
-    ego_nav = (obs[:N_ego_nav] - ego_nav_mean) / (ego_nav_std + 1e-6)
-    lidar = (obs[-N_lidar:] - lidar_mean) / (lidar_std + 1e-6)
-    with torch.no_grad():
-        ego_nav_encoded = ego_nav_encoder(ego_nav).numpy()
-        lidar_encoded = lidar_encoder(lidar).numpy()
-    return np.concatenate([ego_nav_encoded, lidar_encoded])
-
-    
-# Encoder definitions
-# class EgoNavMLP(nn.Module):
-#     features: int = 32
-#     @nn.compact
-#     def __call__(self, x):
-#         x = nn.Dense(64)(x)
-#         x = nn.relu(x)
-#         x = nn.Dense(self.features)(x)
-#         x = nn.relu(x)
-#         return x
-
-# class LidarCNN(nn.Module):
-#     features: int = 32
-#     @nn.compact
-#     def __call__(self, x):
-#         x = x[None, :, None]  # (1, 240, 1)
-#         x = nn.Conv(features=8, kernel_size=(5,), strides=(1,), padding='SAME')(x)
-#         x = nn.relu(x)
-#         x = x.reshape(-1)  # flatten
-#         x = nn.Dense(self.features)(x)
-#         x = nn.relu(x)
-#         return x
-
-# Utility function for encoding a single observation
-def jax_encode_observation(obs, ego_nav_encoder, ego_nav_params, lidar_encoder, lidar_params, ego_nav_mean, ego_nav_std, lidar_mean, lidar_std):
-    N_ego_nav = 19
-    N_lidar = 240
-    obs = np.array(obs)
-    ego_nav = (obs[:N_ego_nav] - ego_nav_mean) / (ego_nav_std + 1e-6)
-    lidar = (obs[-N_lidar:] - lidar_mean) / (lidar_std + 1e-6)
-    ego_nav_encoded = ego_nav_encoder.apply(ego_nav_params, jnp.array(ego_nav))
-    lidar_encoded = lidar_encoder.apply(lidar_params, jnp.array(lidar))
-    return np.concatenate([np.array(ego_nav_encoded), np.array(lidar_encoded)])
 
 # eval_num = 1
 def offline_evaluation(agent, dataset, num_samples: int = 1000, alpha: float = 0.1, seed: int = 0):
@@ -220,34 +141,17 @@ def _surface_to_pil(frame):
         return Image.fromarray(frame)
     raise TypeError(f"Unsupported frame type: {type(frame)}")
 
-# def evaluate_md(obs_mean, obs_std, next_obs_mean, next_obs_std, pca_obs, seed, env_id,  eval_num, agent, env: gym.Env, num_episodes: int, save_video: bool = False, render: bool = False) -> Dict[str, float]:
-def evaluate_md(obs_mean, obs_std, next_obs_mean, next_obs_std,  seed, env_id,  eval_num, agent, env: gym.Env, num_episodes: int, save_video: bool = False, render: bool = False) -> Dict[str, float]:
-# def evaluate_md(ego_nav_mean, ego_nav_std, lidar_mean, lidar_std, seed, env_id,  eval_num, agent, env: gym.Env, num_episodes: int, save_video: bool = False, render: bool = False) -> Dict[str, float]:
+def evaluate_md(obs_mean, obs_std, pca_obs, seed, env_id,  eval_num, agent, env: gym.Env, num_episodes: int, save_video: bool = False, render: bool = False) -> Dict[str, float]:
     episode_rets, episode_costs, episode_lens = [], [], []
     barriers, next_barriers = [], []
     frames_all = []
-    N_ego_nav = 19
-    N_lidar = 240
-    # ego_nav_encoder = EgoNavMLP()
-    # lidar_encoder = LidarCNN()
-    # ego_nav_encoder = EgoNavMLP(N_ego_nav)
-    # lidar_encoder = LidarCNN(N_lidar)
-    # key1, key2 = jax.random.split(jax.random.PRNGKey(0))
-    # ego_nav_params = ego_nav_encoder.init(key1, jnp.ones((19,)))
-    # lidar_params = lidar_encoder.init(key2, jnp.ones((240,)))
-    # ego_nav_encoder.eval()
-    # lidar_encoder.eval()
-
     # for _ in trange(num_episodes, desc="Evaluating", leave=False):
     for ep_idx in trange(num_episodes, desc="Evaluating", leave=False):
         obs, info = env.reset()
         # print('Initial obs:', obs)
         # if obs_mean is not None and obs_std is not None:
         obs = (obs - obs_mean) / (obs_std)
-        # obs = encode_observation(obs, ego_nav_encoder, ego_nav_params, lidar_encoder, lidar_params, ego_nav_mean, ego_nav_std, lidar_mean, lidar_std)
-        # obs = encode_observation(obs, ego_nav_encoder, lidar_encoder, ego_nav_mean, ego_nav_std, lidar_mean, lidar_std)
-
-        # obs = pca_obs.transform(obs.reshape(1, -1)).squeeze()
+        obs = pca_obs.transform(obs.reshape(1, -1)).squeeze()
         # print('Normalized initial obs:', obs)
         episode_ret, episode_cost, episode_len = 0.0, 0.0, 0
 
@@ -307,11 +211,10 @@ def evaluate_md(obs_mean, obs_std, next_obs_mean, next_obs_std,  seed, env_id,  
             # barriers.append(barrier_value)
             # print('barrier_value:', barrier_value)
             next_obs, reward, terminated, truncated, info = env.step(action)
-            # next_obs = encode_observation(next_obs, ego_nav_encoder, ego_nav_params, lidar_encoder, lidar_params, ego_nav_mean, ego_nav_std, lidar_mean, lidar_std)
-            # next_obs = encode_observation(next_obs, ego_nav_encoder, lidar_encoder, ego_nav_mean, ego_nav_std, lidar_mean, lidar_std)
+            
             # if obs_mean is not None and obs_std is not None:
-            next_obs = (next_obs - next_obs_mean) / (next_obs_std)
-            # next_obs = pca_obs.transform(next_obs.reshape(1, -1)).squeeze()
+            next_obs_norm = (next_obs - obs_mean) / (obs_std)
+            next_obs_norm = pca_obs.transform(next_obs_norm.reshape(1, -1)).squeeze()
             # else:
             #     next_obs_norm = next_obs
             # print('next_obs_norm:', next_obs_norm, 'next_obs:', next_obs)
@@ -325,7 +228,7 @@ def evaluate_md(obs_mean, obs_std, next_obs_mean, next_obs_std,  seed, env_id,  
             episode_ret += reward
             episode_len += 1
             episode_cost += cost
-            obs = next_obs
+            obs = next_obs_norm
             
             if terminated or truncated:
                 break

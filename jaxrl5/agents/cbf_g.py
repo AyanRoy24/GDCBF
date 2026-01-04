@@ -5,6 +5,7 @@ from typing import Dict, Optional, Sequence, Tuple, Union, Any
 import flax.linen as nn
 from flax.core import FrozenDict
 import gym 
+# import gymnasium as gym
 import jax
 import jax.numpy as jnp
 import optax
@@ -98,6 +99,8 @@ class CBF(Agent):
         actor_def = GaussianPolicy(hidden_dims=actor_hidden_dims, action_dim=action_dim)        
         # time = jnp.zeros((1, 1))
         observations = jnp.expand_dims(observations, axis = 0)
+        observations = np.zeros((1, 50), dtype=np.float32)
+
         actions = jnp.expand_dims(actions, axis = 0)
         # if actor_architecture == 'gaussian':
         actor_params = actor_def.init(actor_key, observations)['params']

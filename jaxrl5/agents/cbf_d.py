@@ -14,10 +14,12 @@ import pickle
 from flax.training.train_state import TrainState
 from flax import struct
 import numpy as np
+
 from jaxrl5.agents.agent import Agent
 from jaxrl5.data.dataset import DatasetDict
-from jaxrl5.networks import GaussianPolicy, MixtureGaussianPolicy
+from jaxrl5.networks import GaussianPolicy
 from jaxrl5.networks import MLP, Ensemble, StateActionValue, StateValue,get_weight_decay_mask
+from jaxrl5.networks import DDPM, FourierFeatures, cosine_beta_schedule, ddpm_sampler, get_weight_decay_mask, vp_beta_schedule
 
 def expectile_loss(diff, expectile=0.8):
     weight = jnp.where(diff > 0, expectile, (1 - expectile))
@@ -37,12 +39,15 @@ def compute_safe_q(safe_critic_fn, safe_critic_params, observations, actions):
     safe_q_values = safe_q_values.max(axis=0)
     return safe_q_values
 
+def mish(x):
+    return x * jnp.tanh(nn.softplus(x))
+
 class CBF(Agent):
     score_model: TrainState
     critic: TrainState
     target_critic: TrainState
     value: TrainState
-    target_value: TrainState
+    # target_value: TrainState
     safe_critic: TrainState
     safe_target_critic: TrainState
     safe_value: TrainState
@@ -57,8 +62,16 @@ class CBF(Agent):
     cost_ub: float
     r_min: float 
     mode:int = struct.field(pytree_node=False)  # 1: 'fisor', 2: 'add', 3: 'reach'
-    tanh_scale: float
-    num_components: int = struct.field(pytree_node=False)
+
+    # target_score_model: TrainState
+    T: int = struct.field(pytree_node=False)
+    # N: int = struct.field(pytree_node=False)
+    M: int = struct.field(pytree_node=False)
+    ddpm_temperature: float
+    betas: jnp.ndarray
+    alphas: jnp.ndarray
+    alpha_hats: jnp.ndarray
+    clip_sampler: bool = struct.field(pytree_node=False)
 
     @classmethod
     def create(
@@ -88,37 +101,37 @@ class CBF(Agent):
         mode: int = 1,  # 1: 'fisor', 2: 'add', 3: 'reach'
         actor_tau: float = 0.001,
         cost_limit: float = 10,
-        tanh_scale: float = 5,
-        num_components: int = 5
+
+        T: int = 5,
+        time_dim: int = 64,
+        # N: int = 64,
+        M: int = 0,
+        ddpm_temperature: float = 1.0,
+        clip_sampler: bool = True,
+        beta_schedule: str = 'vp',
     ):
         rng = jax.random.PRNGKey(seed)
         rng, actor_key, critic_key, value_key, safe_critic_key, safe_value_key = jax.random.split(rng, 6)
         actions = action_space.sample()
         observations = observation_space.sample()
         action_dim = action_space.shape[0]
+        
+        preprocess_time_cls = partial(FourierFeatures, output_size=time_dim, learnable=True)
+        cond_model_cls = partial(MLP, hidden_dims=(128, 128), activations=nn.relu, activate_final=False)
         if decay_steps is not None:
             actor_lr = optax.cosine_decay_schedule(actor_lr, decay_steps)
-        # print("Actor hidden", actor_hidden_dims)
-        # exit()
-        actor_def = GaussianPolicy(hidden_dims=actor_hidden_dims, action_dim=action_dim) 
-        # actor_def = MixtureGaussianPolicy(hidden_dims=actor_hidden_dims, action_dim=action_dim, num_components=num_components)       
-        # time = jnp.zeros((1, 1))
+        
+        base_model_cls = partial(MLP, hidden_dims=tuple(list(actor_hidden_dims) + [action_dim]), activations=nn.relu, activate_final=False)
+        actor_def = DDPM(time_preprocess_cls=preprocess_time_cls, cond_encoder_cls=cond_model_cls, reverse_encoder_cls=base_model_cls)
+        
+        time = jnp.zeros((1, 1))
         observations = jnp.expand_dims(observations, axis = 0)
-        # observations = np.zeros((1, 64), dtype=np.float32)
-
         actions = jnp.expand_dims(actions, axis = 0)
-        # if actor_architecture == 'gaussian':
-        actor_params = actor_def.init(actor_key, observations)['params']
-        # else:
-        #     actor_params = actor_def.init(actor_key, observations, actions,
-        #                                 time)['params']        
+        actor_params = actor_def.init(actor_key, observations, actions, time)['params']
         actor_params = FrozenDict(actor_params) 
-        score_model = TrainState.create(apply_fn=actor_def.apply,
-                                        params=actor_params,
-                                        tx=optax.adamw(learning_rate=actor_lr, 
-                                                       weight_decay=actor_weight_decay if actor_weight_decay is not None else 0.0,
-                                                       mask=get_weight_decay_mask,))        
 
+        score_model = TrainState.create(apply_fn=actor_def.apply, params=actor_params, tx=optax.adamw(learning_rate=actor_lr, weight_decay=actor_weight_decay if actor_weight_decay is not None else 0.0, mask=get_weight_decay_mask,))
+        # target_score_model = TrainState.create(apply_fn=actor_def.apply, params=actor_params, tx=optax.GradientTransformation(lambda _: None, lambda _: None))
 
         critic_base_cls = partial(MLP, hidden_dims=critic_hidden_dims, activate_final=True,use_layer_norm=critic_layer_norm)
         critic_cls = partial(StateActionValue, base_cls=critic_base_cls)
@@ -156,11 +169,11 @@ class CBF(Agent):
         value = TrainState.create(apply_fn=value_def.apply,
                                   params=value_params,
                                   tx=value_optimiser)
-        target_value = TrainState.create(
-            apply_fn=value_def.apply,
-            params=value_params,
-            tx=optax.GradientTransformation(lambda _: None, lambda _: None),
-        )
+        # target_value = TrainState.create(
+        #     apply_fn=value_def.apply,
+        #     params=value_params,
+        #     tx=optax.GradientTransformation(lambda _: None, lambda _: None),
+        # )
         # if critic_type == 'qc':
         value_def = StateValue(base_cls=value_base_cls)            
         safe_value_params = value_def.init(safe_value_key, observations)["params"]
@@ -168,7 +181,17 @@ class CBF(Agent):
         safe_value = TrainState.create(apply_fn=value_def.apply,
                                   params=safe_value_params,
                                   tx=value_optimiser)
-  
+
+        if beta_schedule == 'cosine':
+            betas = jnp.array(cosine_beta_schedule(T))
+        elif beta_schedule == 'linear':
+            betas = jnp.linspace(1e-4, 2e-2, T)
+        elif beta_schedule == 'vp':
+            betas = jnp.array(vp_beta_schedule(T))
+        else:
+            raise ValueError(f'Invalid beta schedule: {beta_schedule}')
+        alphas = 1 - betas
+        alpha_hat = jnp.array([jnp.prod(alphas[:i + 1]) for i in range(T)])
 
         return cls(
             actor=None, # Base class attribute
@@ -176,7 +199,7 @@ class CBF(Agent):
             critic=critic,
             target_critic=target_critic,
             value=value,
-            target_value=target_value,
+            # target_value=target_value,
             safe_critic=safe_critic,
             safe_target_critic=safe_target_critic,
             safe_value=safe_value,
@@ -192,14 +215,30 @@ class CBF(Agent):
             r_min=r_min,
             mode=mode,
             actor_tau=actor_tau,
-            tanh_scale=tanh_scale,
-            num_components=num_components
-            
+
+            # target_score_model=target_score_model,
+            T=T,
+            M=M,
+            ddpm_temperature=ddpm_temperature,
+            betas=betas,
+            alphas=alphas,
+            alpha_hats=alpha_hat,
+            clip_sampler=clip_sampler,
         )
 
     def update_actor(agent, batch: DatasetDict) -> Tuple[Agent, Dict[str, float]]:
-        # rng = agent.rng
-        # key, rng = jax.random.split(rng, 2)
+        rng = agent.rng
+        key, rng = jax.random.split(rng, 2)
+        time = jax.random.randint(key, (batch['actions'].shape[0], ), 0, agent.T)
+        key, rng = jax.random.split(rng, 2)
+        noise_sample = jax.random.normal(key, (batch['actions'].shape[0], agent.action_dim))
+        alpha_hats = agent.alpha_hats[time]
+        time = jnp.expand_dims(time, axis=1)
+        alpha_1 = jnp.expand_dims(jnp.sqrt(alpha_hats), axis=1)
+        alpha_2 = jnp.expand_dims(jnp.sqrt(1 - alpha_hats), axis=1)
+        noisy_actions = alpha_1 * batch['actions'] + alpha_2 * noise_sample
+
+        # Compute weights as before (reward_adv, etc.)
         qs = agent.target_critic.apply_fn({"params": agent.target_critic.params}, 
                                           batch["observations"], 
                                           batch["actions"])
@@ -220,21 +259,22 @@ class CBF(Agent):
         reward_weights = jnp.exp(reward_adv * agent.reward_temperature)
         reward_weights = jnp.clip(reward_weights, 0, 100)
         weights = reward_weights 
-    
 
-        def actor_loss_fn(actor_params: FrozenDict[str, Any]):
-            # print(batch['observations'].shape)
-            dist = agent.score_model.apply_fn({"params": actor_params}, batch["observations"])
-            log_probs = dist.log_prob(batch['actions'])
-            actor_loss = -(log_probs * weights).mean() 
-            return actor_loss, {"weights": weights.mean(), "log_probs": log_probs.mean()}
-                
+        def actor_loss_fn(score_model_params):
+            eps_pred = agent.score_model.apply_fn({'params': score_model_params},
+                                                batch['observations'],
+                                                noisy_actions,
+                                                time,
+                                                rngs={'dropout': key},
+                                                training=True)
+            actor_loss = (((eps_pred - noise_sample) ** 2).sum(axis=-1) * weights).mean()
+            return actor_loss, {'actor_loss': actor_loss, 'weights': weights.mean()}
+
         grads, info = jax.grad(actor_loss_fn, has_aux=True)(agent.score_model.params)
         score_model = agent.score_model.apply_gradients(grads=grads)
-        agent = agent.replace(score_model=score_model)
-
+        agent = agent.replace(score_model=score_model, rng=rng)
         return agent, info
-
+    
     @jax.jit
     def barrier_values(self, observations):
         return self.safe_value.apply_fn({"params": self.safe_value.params},observations)
@@ -243,30 +283,14 @@ class CBF(Agent):
     def eval_actions(self, observations: jnp.ndarray):
         rng = self.rng
         assert len(observations.shape) == 1
-        '''
-        To further enhance safety,we sample N action candidates from the diffusion policy and select the safest one.
-        the logic for enhancing safety by sampling N action candidates from the diffusion policy and selecting the safest one (with the lowest Q*_h value)
-        '''
         observations = jax.device_put(observations)
-        observations_batch = jnp.expand_dims(observations, axis=0).repeat(self.N, axis=0)
-        # we sample N action candidates and select the safest one (i.e., the lowest Q*_h value) as the final output
-
-        # Sample actions from the learned Gaussian policy
-        rng, key = jax.random.split(rng, 2)
-        dist = self.score_model.apply_fn(
-            {"params": self.score_model.params}, 
-            observations_batch,
-            temperature=1 # rng doesn't matter if temperature=0
-        )
-        actions = dist.sample(seed=key)
-        # actions = dist.sample(seed=self.rng)
-        qcs = compute_safe_q(self.safe_target_critic.apply_fn, self.safe_target_critic.params, observations_batch, actions)
-        # select the safest one (i.e., the lowest Q*_h value) as the final output
-        idx = jnp.argmin(qcs)        
+        observations = jnp.expand_dims(observations, axis=0).repeat(self.N, axis=0)
+        score_params = self.score_model.params
+        actions, rng = ddpm_sampler(self.score_model.apply_fn, score_params, self.T, rng, self.action_dim, observations, self.alphas, self.alpha_hats, self.betas, self.ddpm_temperature, self.M, self.clip_sampler)
+        qcs = compute_safe_q(self.safe_target_critic.apply_fn, self.safe_target_critic.params, observations, actions)
+        idx = jnp.argmin(qcs)
         action = actions[idx]
-        # action = actions[0]
         new_rng = rng
-        # return np.array(action.squeeze()), self.replace(rng=new_rng)
         return action.squeeze(), self.replace(rng=new_rng)
 
 
@@ -385,12 +409,11 @@ class CBF(Agent):
             # update RNG so choices change across steps
             agent = agent.replace(rng=rng)
         elif agent.mode == 10:
-            # target_qh = jnp.maximum(h_sa, agent.discount * jnp.tanh(next_vh/agent.tanh_scale)*agent.tanh_scale)
-            target_qh = (1 - agent.discount) * h_sa + agent.discount * jnp.maximum(h_sa, next_vh)
-            target_qh = jnp.tanh(target_qh / agent.tanh_scale) * agent.tanh_scale
-
+            target_qh = jnp.maximum(h_sa, agent.discount * jnp.tanh(next_vh/agent.tanh_scale)*agent.tanh_scale)
         else:
             raise ValueError(f"Unknown CBF mode: {agent.mode}")
+        # target_qh = 0.99 *jnp.tanh(target_qh / 20) * 20
+        target_qh = jnp.tanh(target_qh / 20) * 20
 
 
 

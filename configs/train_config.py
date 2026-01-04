@@ -41,6 +41,7 @@ def get_config(config_string):
                     value_lr=3e-4,
                     cbf_lr=3e-4,
                     reward_temperature=3.0,
+                    N=16,
                     actor_weight_decay=None,
                     decay_steps=int(3e6),
                     value_layer_norm=False,
@@ -49,8 +50,16 @@ def get_config(config_string):
                     cost_tau=0.15,
                     cost_ub=150,
                     r_min=-0.001,
-                    N=16,
-                    discount=0.99,                    
+                    discount=0.99,       
+                    # num_components=1,  
+                    # tanh_scale = 20.0,   
+                    
+                    # ddpm_temperature=0.3,
+                    # beta_schedule='linear',
+                    # T=3,
+ 
+                    # M=0,
+                    # clip_sampler=True,                
                 ),
                 dataset_kwargs=dict(
                     **base_data_config,

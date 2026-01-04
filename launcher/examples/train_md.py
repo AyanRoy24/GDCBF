@@ -67,8 +67,7 @@ def call_main(details, env_id):
         ds.normalize_returns(env.max_episode_reward, env.min_episode_reward, env_max_steps)
     # ds.seed(details['dataset_kwargs']["seed"])
     ds.seed(details["seed"])
-    obs_mean = ds.obs_mean
-    obs_std = ds.obs_std
+    
     # print('Dataset obs mean:', obs_mean, 'obs std:', obs_std)
     config_dict = dict(details['agent_kwargs'])
     model_cls = config_dict.pop("model_cls") 
@@ -76,16 +75,32 @@ def call_main(details, env_id):
     agent = globals()[model_cls].create(
         details['seed'], env.observation_space, env.action_space, **config_dict
     )
+    # agent = globals()[model_cls].create(
+    #     details['seed'], 50, env.action_space, **config_dict
+    # )
     save_time, eval_num = 1, 1
     for i in trange(details['max_steps'], smoothing=0.1, desc=details['experiment_name']):
         sample = ds.sample_jax(details['batch_size'])     
         agent, info = agent.update(sample)
         if i % details['log_interval'] == 0:
             wandb.log({f"train/{k}": v for k, v in info.items()}, step=i)
+            
     if details['env_name'] == 'PointRobot':
         eval_info = evaluate_pr(agent, env, details['eval_episodes'])
     elif env_id >= 30:
-        eval_info = evaluate_md(obs_mean, obs_std, details['seed'], env_id, eval_num, agent, env, details['eval_episodes'], render=False) #, save_video=True, )
+    # else:
+        obs_mean = ds.obs_mean
+        obs_std = ds.obs_std
+        next_obs_mean = ds.next_obs_mean
+        next_obs_std = ds.next_obs_std
+        # pca_obs = ds.pca_obs
+        # ego_nav_mean = ds.ego_nav_mean
+        # ego_nav_std = ds.ego_nav_std
+        # lidar_mean = ds.lidar_mean
+        # lidar_std = ds.lidar_std
+        # eval_info = evaluate_md(obs_mean, obs_std, pca_obs, details['seed'], env_id, eval_num, agent, env, details['eval_episodes'], render=False) #, save_video=True, )
+        eval_info = evaluate_md(obs_mean, obs_std, next_obs_mean, next_obs_std, details['seed'], env_id, eval_num, agent, env, details['eval_episodes'], render=False) #, save_video=True, )
+        # eval_info = evaluate_md(ego_nav_mean, ego_nav_std, lidar_mean, lidar_std, details['seed'], env_id, eval_num, agent, env, details['eval_episodes'], render=False) #, save_video=True, )
             # eval_num += 1        
             # eval_info = evaluate(agent, env, details['eval_episodes'], save_video=True, render=True)
     else:
@@ -101,12 +116,25 @@ def call_main(details, env_id):
 def main(_):
     parameters = FLAGS.config
     env_id = FLAGS.env_id
-    # mode = FLAGS.mode
+    mode = FLAGS.mode
+    algo = 'fisor' if mode == 1 else 'tanh'
+
+    parameters['project'] = FLAGS.project
+    parameters['max_steps'] = FLAGS.max_steps
     parameters['env_name'] = env_list[env_id]    
     parameters['group'] = parameters['env_name']
-    # parameters['experiment_name'] = str(env_id) + '_'  + str(parameters['env_name']) + '_' + str(parameters['dataset_kwargs']['seed']) #str(np.random.randint(1000))
-    parameters['experiment_name'] = str(env_id) + '_'  + str(parameters['env_name']) + '_' + str(parameters['seed']) #str(np.random.randint(1000))
+    parameters['experiment_name'] = str(env_id) + '_' + algo + '_'  + str(parameters['env_name']) + '_' + str(parameters['seed']) #str(np.random.randint(1000))
     
+    if parameters['env_name'] == 'PointRobot':
+        parameters['max_steps'] = 100001
+        parameters['batch_size'] = 1024
+        parameters['eval_interval'] = 25000
+        # parameters['eval_episodes'] = 2
+        # parameters['agent_kwargs']['cost_temperature'] = 2
+        parameters['agent_kwargs']['reward_temperature'] = 5
+        # parameters['agent_kwargs']['cost_tau'] = 0.01
+        parameters['agent_kwargs']['cost_ub'] = 150
+        parameters['agent_kwargs']['N'] = 8
     if env_id >= 21:  # Bullet safety gym envs
         parameters['agent_kwargs']['cost_limit'] = 5
     
