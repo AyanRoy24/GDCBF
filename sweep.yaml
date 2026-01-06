@@ -1,0 +1,8 @@
+method: grid
+project: "081125"
+
+parameters:
+  mode:
+    values: [1, 2, 3, 4, 5, 6]
+  repeat:
+    values: [1, 2, 3, 4, 5]

@@ -1,0 +1,36 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# huge file
+
+# log
+wandb/
+
+results/
+
+.vscode
+
+*.hdf5
+
+# folder
+#data/
+assets/
+reference/
+sweep/
+backup/
+cgpt/
+
+# files
+*.ipynb
+*.hdf5
+*.txt
+*.png
+*.pdf
+*.sh
+*.md
+jaxrl5/data/generate_dsrl_il_jax_cleaned.py
