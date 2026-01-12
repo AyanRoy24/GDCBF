@@ -7,8 +7,8 @@ def get_config(config_string):
         # env_id=38,
         seed=-1,
         max_steps=500_001,
-        eval_episodes=20,
-        batch_size=2048, #Actor batch size x 2 (so really 1024), critic is fixed to 256
+        eval_episodes=1,
+        batch_size=512, #Actor batch size x 2 (so really 1024), critic is fixed to 256
         log_interval=1_000,
         eval_interval=250_000,
         normalize_returns=True,
@@ -38,33 +38,45 @@ def get_config(config_string):
                     actor_lr=3e-4,
                     critic_lr=3e-4,
                     value_lr=3e-4,
+                   
                     cost_temperature=5,
                     reward_temperature=3,
-                    T=5,
+                   
+                    # T=5,
                     N=16,
-                    M=0,
-                    clip_sampler=True,
-                    actor_dropout_rate=0.1,
-                    actor_num_blocks=3,
+                   
+                    # M=0,
+                    # clip_sampler=True,
+                    # actor_dropout_rate=0.1,
+                    # actor_num_blocks=3,
+                   
                     actor_weight_decay=None,
                     decay_steps=int(3e6),
-                    actor_layer_norm=True,
+                    
+                    # actor_layer_norm=True,
                     value_layer_norm=False,
                     actor_tau=0.001,
-                    actor_architecture='ln_resnet',
+                   
+                    # actor_architecture='ln_resnet',
                     # critic_objective='expectile',
                     reward_tau  = 0.75,
-                    cost_tau = 0.15,
+                    cost_tau = 0.5,
+                   
                     # critic_type="hj", #[hj, qc]
                     cost_ub=150,
-                    beta_schedule='vp',
+                   
+                    # beta_schedule='vp',
                     # actor_objective="feasibility", 
                     # sampling_method="ddpm", 
                     # extract_method="minqc", 
+                    discount=0.99,
 
-                    r_min=-0.001,
+                    critic_layer_norm=False,
+                    cbf_lr=3e-4,
+                    r_min=-0, #.001,
                     # tanh_scale = 5.0,           
-                    # mode=1,  # FISOR
+                    mode=1,  # FISOR
+                    # num_components=9,
 
                 ),
                 dataset_kwargs=dict(

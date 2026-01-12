@@ -28,7 +28,7 @@ FLAGS = flags.FLAGS
 flags.DEFINE_integer('env_id', 23, 'Choose env')
 # flags.DEFINE_float('ratio', 1.0, 'dataset ratio')
 flags.DEFINE_integer('mode', 1, 'Mode for training')
-# flags.DEFINE_integer('max_steps', 500_001, 'max steps')
+flags.DEFINE_integer('max_steps', 500_001, 'max steps')
 # flags.DEFINE_integer('eval', 10000, 'eval steps')
 flags.DEFINE_string('project', '081125', 'Name of the experiment')
 
@@ -82,30 +82,32 @@ def call_main(details, env_id):
         agent, info = agent.update(sample)
         if i % details['log_interval'] == 0:
             wandb.log({f"train/{k}": v for k, v in info.items()}, step=i)
-        # if i >= (details['max_steps']-20):
+        if i >= (details['max_steps']-20):
         # if i % details['eval_interval'] == 0:
-    if details['env_name'] == 'PointRobot':
-        eval_info = evaluate_pr(agent, env, details['eval_episodes'])
-    # elif env_id >= 30:
-    #     eval_info = evaluate_md(obs_mean, obs_std, details['seed'], env_id, eval_num, agent, env, details['eval_episodes'], render=False) #, save_video=True, )
-    #         # eval_num += 1        
-            # eval_info = evaluate(agent, env, details['eval_episodes'], save_video=True, render=True)
-    else:
-        eval_info = evaluate(details['seed'], agent, env, details['eval_episodes']) #, details['agent_kwargs']['cost_limit'])
+            if details['env_name'] == 'PointRobot':
+                eval_info = evaluate_pr(agent, env, details['eval_episodes'])
+            # elif env_id >= 30:
+            #     eval_info = evaluate_md(obs_mean, obs_std, details['seed'], env_id, eval_num, agent, env, details['eval_episodes'], render=False) #, save_video=True, )
+            #         # eval_num += 1        
+                    # eval_info = evaluate(agent, env, details['eval_episodes'], save_video=True, render=True)
+            else:
+                eval_info = evaluate(details['seed'], agent, env, details['eval_episodes']) #, details['agent_kwargs']['cost_limit'])
 
-    if details['env_name'] != 'PointRobot':
-        eval_info["n_return"], eval_info["n_cost"] = env.get_normalized_score(eval_info["return"], eval_info["cost"])
-    
-    # print ({f"eval/{k}": v for k, v in eval_info.items()})
-    wandb.log({f"{k}": v for k, v in eval_info.items()} , step=i)        
-    # wandb.log({f"{k}": v for k, v in eval_info.items()} )
+            if details['env_name'] != 'PointRobot':
+                eval_info["n_return"], eval_info["n_cost"] = env.get_normalized_score(eval_info["return"], eval_info["cost"])
+            
+            # print ({f"eval/{k}": v for k, v in eval_info.items()})
+            wandb.log({f"{k}": v for k, v in eval_info.items()} , step=i)        
+            # wandb.log({f"{k}": v for k, v in eval_info.items()} )
 
 
 def main(_):
     parameters = FLAGS.config
     env_id = FLAGS.env_id
-    # mode = FLAGS.mode
-    algo = 'fisor' #if mode == 1 else 'tanh'
+    mode = FLAGS.mode
+    parameters['max_steps'] = FLAGS.max_steps
+    parameters['agent_kwargs']['mode'] = mode
+    algo = {1: 'fisor', 2: 'yvbf', 3: 'rcrl'}.get(mode, 'tanh')
     # algo = 'tanh'
     parameters['project'] = FLAGS.project
     parameters['env_name'] = env_list[env_id]    

@@ -33,4 +33,5 @@ cgpt/
 *.pdf
 *.sh
 *.md
-jaxrl5/data/generate_dsrl_il_jax_cleaned.py
+*.yaml
+sweep.*

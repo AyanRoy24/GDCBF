@@ -86,3 +86,50 @@ class GaussianPolicy(nn.Module):
             return distrax.Transformed(base_dist, tanh_bijector)
         else:
             return base_dist
+        
+
+class MixtureGaussianPolicy(nn.Module):
+    hidden_dims: Sequence[int]
+    action_dim: int
+    num_components: int = 5  # Number of mixture components
+    log_std_min: Optional[float] = -20
+    log_std_max: Optional[float] = 2
+    tanh_squash_distribution: bool = False
+
+    @nn.compact
+    def __call__(
+        self, observations: jnp.ndarray, temperature: float = 1.0
+    ) -> distrax.Distribution:
+        # Output shape: (batch, num_components * (2 * action_dim + 1))
+        # For each component: mean, log_std, and logit (weight)
+        out_dim = self.num_components * (2 * self.action_dim + 1)
+        outputs = MLP(
+            hidden_dims=(*self.hidden_dims, out_dim),
+            activate_final=False,
+        )(observations)
+
+        # Reshape to (batch, num_components, 2 * action_dim + 1)
+        outputs = outputs.reshape((-1, self.num_components, 2 * self.action_dim + 1))
+        means = outputs[..., :self.action_dim]
+        log_stds = outputs[..., self.action_dim:2 * self.action_dim]
+        logits = outputs[..., -1]
+
+        log_stds = jnp.clip(log_stds, self.log_std_min, self.log_std_max)
+        if not self.tanh_squash_distribution:
+            means = nn.tanh(means)
+
+        # Create a mixture of Gaussians
+        base_dist = distrax.MultivariateNormalDiag(
+            loc=means, scale_diag=jnp.exp(log_stds) * temperature
+        )
+        cat_dist = distrax.Categorical(logits=logits)
+        mixture = distrax.MixtureSameFamily(
+            mixture_distribution=cat_dist,
+            components_distribution=base_dist
+        )
+
+        if self.tanh_squash_distribution:
+            tanh_bijector = distrax.Block(distrax.Tanh(), ndims=1)
+            return distrax.Transformed(mixture, tanh_bijector)
+        else:
+            return mixture

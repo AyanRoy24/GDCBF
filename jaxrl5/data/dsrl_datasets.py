@@ -1,6 +1,6 @@
 import os
-# import gymnasium as gym
-import gym
+import gymnasium as gym
+# import gym
 import dsrl
 import numpy as np
 from jaxrl5.data.dataset import Dataset
