@@ -16,4 +16,4 @@ Run
 export XLA_PYTHON_CLIENT_PREALLOCATE=False
 python train.py --config train_config.py:cbf --env_id 30 
 ```
-where ``env_id`` serves as an index for the [list of environments](https://github.com/ZhengYinan-AIR/FISOR/tree/metadrive_imitation/env/env_list.py).
+where ``env_id`` serves as an index for the [list of environments](env/env_list.py)

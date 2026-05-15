@@ -10,4 +10,4 @@ Run
 export XLA_PYTHON_CLIENT_PREALLOCATE=False
 python train.py --config train_config.py:cbf --env_id 19
 ```
-where ``env_id`` serves as an index for the given in env/env_list.py
+where ``env_id`` serves as an index for the given in [list of environments](env/env_list.py)
